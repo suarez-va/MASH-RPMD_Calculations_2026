@@ -10,21 +10,21 @@ import numpy as np
 
 CONFIG = {
     # ----------------------------------------------------------------- orchestration (workflow)
-    'n_traj'     : 225,             # number of independent trajectories to run
+    'n_traj'     : 777,             # number of independent trajectories to run
     'base_seed'  : None,       # int -> reproducible; None -> fresh OS entropy each trajectory
     'grid_dir'   : 'traj_grid',    # subdir (relative to this file) holding traj0/, traj1/, ...
-    'ncores'     : 14,             # local cores for `python -m workflow.runner`
+    'ncores'     : 11,             # local cores for `python -m workflow.runner`
     'system_file': 'traj.py',    # the module providing run_trajectory(cfg, seed)
 
     # SLURM knobs, used only by `python -m workflow.slurm` (safe to ignore locally)
     'slurm': {
         'job_name'      : 'rpmash_grid',
-        'time'          : '02:00:00',
+        'time'          : '01:00:00',
         'cpus_per_task' : 1,
         'max_concurrent': None,        # e.g. 50 -> "--array=0-N%50"
         'partition'     : None,
-        'account'       : None,
-        'mem'           : None,
+        'account'       : 'gts-jkretchmer3-chemx',
+        'mem'           : '16GB',
         'python'        : 'python',
         'extra_directives': [],        # raw "#SBATCH ..." lines if you need something uncommon
     },
