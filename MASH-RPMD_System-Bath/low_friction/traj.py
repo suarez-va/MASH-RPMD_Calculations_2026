@@ -79,6 +79,6 @@ def run_trajectory(cfg, seed):
 
     # Production done: remove large per-trajectory scratch files not needed for analysis.
     # (checkpoint.npz holds memP/Ffluci; memK.dat is the friction kernel; nucP not used downstream.)
-    for _f in ('checkpoint.npz', 'memK.dat', 'nucP.dat'):
+    for _f in ('checkpoint.npz', 'memK.dat'):
         if os.path.exists(_f):
             os.remove(_f)
