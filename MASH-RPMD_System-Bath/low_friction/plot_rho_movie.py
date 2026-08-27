@@ -52,7 +52,8 @@ def main():
             Ri = f['nucR'][i][:, :, 0]                 # (T, nbds), DOF 0 -- one lazy chunk read
             # trajectory weight W = 2*|mapSz(t=0)| (MASH initial-population weight); bead-mean of the
             # t=0 spin (uniform across beads for a prepared state). Equal weights if mapSz is absent.
-            Wi = 2.0 * abs(f['mapSz'][i, 0, :].mean()) if has_w else 1.0
+            #Wi = 2.0 * abs(f['mapSz'][i, 0, :].mean()) if has_w else 1.0
+            Wi = 2.0 * abs(f['mapSz'][i, 0, :].mean())*np.heaviside(-f['mapSz'][i, 0, :].mean(), 0.5) if has_w else 1.0
             wsum += Wi
             for fi, t in enumerate(fidx):
                 counts[fi] += Wi * np.histogram(Ri[t], bins=edges)[0]
