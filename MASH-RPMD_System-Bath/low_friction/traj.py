@@ -72,7 +72,8 @@ def run_trajectory(cfg, seed):
     pot_p = [kvec, cfg['epsil'], lbd, cfg['delta'], bath]
     m2 = _build(cfg, pot_p, ck['R'].copy(), ck['P'].copy(), seed,
                 init_memP=ck['memP'].copy(), init_Ffluci=ck['Ffluci'].copy())
-    m2.init_map_spin(init_state=0)
+    #m2.init_map_spin(init_state=0)
+    m2.init_map_spin(init_state=None)
     #m2.mapSx = ck['Sx'].copy(); m2.mapSy = ck['Sy'].copy(); m2.mapSz = ck['Sz'].copy()
     Nprod = round(cfg['total_time'] / delt)
     m2.run_dynamics(Nprod, cfg['Nprint'], delt, cfg['intype'], init_time=0.0, small_dt_ratio=1)
