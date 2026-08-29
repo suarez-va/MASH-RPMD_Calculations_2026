@@ -151,9 +151,9 @@ def _plot(out, r):
     t = r['time']
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7.5, 8), sharex=True)
 
-    ax1.axhline(0.0, color='0.7', lw=0.8)
-    ax1.plot(t, r['C11'], color='C0', lw=1.6, label=r'$C_{11}(t)$')
-    ax1.fill_between(t, r['C11']-r['C11_SE'], r['C11']+r['C11_SE'], color='C0', alpha=0.3, lw=0)
+    #ax1.axhline(0.0, color='0.7', lw=0.8)
+    #ax1.plot(t, r['C11'], color='C0', lw=1.6, label=r'$C_{11}(t)$')
+    #ax1.fill_between(t, r['C11']-r['C11_SE'], r['C11']+r['C11_SE'], color='C0', alpha=0.3, lw=0)
     ax1.plot(t, r['C12'], color='C3', lw=1.6, label=r'$C_{12}(t)$')
     ax1.fill_between(t, r['C12']-r['C12_SE'], r['C12']+r['C12_SE'], color='C3', alpha=0.3, lw=0)
     ax1.set_ylabel('correlation function')

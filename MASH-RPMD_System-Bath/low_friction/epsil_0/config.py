@@ -18,7 +18,7 @@ CONFIG = {
 
     # SLURM knobs, used only by `python -m workflow.slurm` (safe to ignore locally)
     'slurm': {
-        'max_tasks'     : 495,
+        'max_tasks'     : 250,
         'job_name'      : 'rpmash_grid',
         'time'          : '24:00:00',
         'cpus_per_task' : 1,
@@ -50,8 +50,8 @@ CONFIG = {
     # integrator / thermostat
     'intype'         : 'vv',
     'delt'           : 0.001,
-    'total_time'     : 10.0,        # a.u.; Nsteps = total_time / delt
-    'Nprint'         : 25,
+    'total_time'     : 20.0,        # a.u.; Nsteps = total_time / delt
+    'Nprint'         : 50,
     'langevin'       : 'generalized',
     'langevin_params': {'gamma': 2.00, 'Tmem': 10.0, 'Tfluc': 250.0},
 

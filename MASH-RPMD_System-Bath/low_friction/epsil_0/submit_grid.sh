@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=rpmash_grid
-#SBATCH --array=0-492
+#SBATCH --array=0-249
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
@@ -18,5 +18,5 @@ export PYTHONPATH=/storage/home/hcoda1/8/vsuarez6/r-jkretchmer3-0/repos/RP_MASH:
 cd /storage/project/r-jkretchmer3-0/vsuarez6/repos/MASH-RPMD_Calculations_2026/MASH-RPMD_System-Bath/low_friction/epsil_0
 eval "$(/storage/home/hcoda1/8/vsuarez6/r-jkretchmer3-0/MiniConda/bin/conda shell.bash hook)"
 conda activate map-rpmd
-# each task runs trajectories  (SLURM_ARRAY_TASK_ID * 203) .. +203-1  one at a time
-python -m workflow.worker --config /storage/project/r-jkretchmer3-0/vsuarez6/repos/MASH-RPMD_Calculations_2026/MASH-RPMD_System-Bath/low_friction/epsil_0/config.py --task-id $SLURM_ARRAY_TASK_ID --chunk 203
+# each task runs trajectories  (SLURM_ARRAY_TASK_ID * 400) .. +400-1  one at a time
+python -m workflow.worker --config /storage/project/r-jkretchmer3-0/vsuarez6/repos/MASH-RPMD_Calculations_2026/MASH-RPMD_System-Bath/low_friction/epsil_0/config.py --task-id $SLURM_ARRAY_TASK_ID --chunk 400
