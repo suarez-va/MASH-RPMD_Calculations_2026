@@ -131,18 +131,16 @@ def compute_pop(path, nblocks=None, tmax=None):
                 params=dict(kvec=kvec, epsil=epsil, lbd=lbd, delta=delta))
 
 
-def _write_dat(out, r):
-    cols = [r['time'], r['C11'], r['C11_SE'], r['C12'], r['C12_SE']] + r['U_means'] + r['V_means']
-    data = np.column_stack(cols)
+def _write_dat(out, r, which):
+    """Write the averaged correlation function `which` ('C11' or 'C12') as [time, value, SE]."""
+    data = np.column_stack([r['time'], r[which], r[which + '_SE']])
     p = r['params']
     header = (
-        'C_11(t), C_12(t): single whole-bracket ensemble averages (see module docstring; no prefactor)\n'
-        'C11_SE/C12_SE = blockSEM of the whole bracket (one combined block SE, not per-term quadrature)\n'
+        f"{which}(t): single whole-bracket ensemble average (see analyze_pop.py docstring; no prefactor)\n"
+        f"{which}_SE = blockSEM of the whole bracket (one combined block SE, not per-term quadrature)\n"
         f"n_traj={r['n_traj']} nbds={r['nbds']} nblocks={r['nblocks']} "
         f"kvec={p['kvec']} epsil={p['epsil']} lbd={p['lbd']} delta={p['delta']:.6e}\n"
-        'A=mean_b a(R_b), B=mean_b b(R_b) [avg over beads]; a=-delta/norm, b=kappa/norm\n'
-        'C11 == U1+U2+U3+U4 ; C12 == V1+V2+V3+V4 (diagnostic sub-term means below)\n'
-        'columns: time C11 C11_SE C12 C12_SE  U1 U2 U3 U4  V1 V2 V3 V4'
+        f"columns: time  {which}  {which}_SE"
     )
     np.savetxt(out, data, fmt='%20.10e', header=header)
 
@@ -151,22 +149,20 @@ def _plot(out, r):
     t = r['time']
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7.5, 8), sharex=True)
 
-    #ax1.axhline(0.0, color='0.7', lw=0.8)
-    #ax1.plot(t, r['C11'], color='C0', lw=1.6, label=r'$C_{11}(t)$')
-    #ax1.fill_between(t, r['C11']-r['C11_SE'], r['C11']+r['C11_SE'], color='C0', alpha=0.3, lw=0)
-    ax1.plot(t, r['C12'], color='C3', lw=1.6, label=r'$C_{12}(t)$')
-    ax1.fill_between(t, r['C12']-r['C12_SE'], r['C12']+r['C12_SE'], color='C3', alpha=0.3, lw=0)
-    ax1.set_ylabel('correlation function')
+    # top panel: full C11 with a reference line at 1
+    ax1.axhline(1.0, color='0.7', lw=0.8, ls='--')
+    ax1.plot(t, r['C11'], color='C0', lw=1.6, label=r'$C_{11}(t)$')
+    ax1.fill_between(t, r['C11']-r['C11_SE'], r['C11']+r['C11_SE'], color='C0', alpha=0.3, lw=0)
+    ax1.set_ylabel(r'$C_{11}(t)$')
     ax1.legend(loc='best', frameon=False)
     ax1.set_title(f"n_traj={r['n_traj']}, nbds={r['nbds']}, nblocks={r['nblocks']}")
 
-    for u, lab in zip(r['U_means'], U_LABELS):
-        ax2.plot(t, u, lw=1.0, ls='-',  label='C11: ' + lab)
-    for v, lab in zip(r['V_means'], V_LABELS):
-        ax2.plot(t, v, lw=1.0, ls='--', label='C12: ' + lab)
-    ax2.axhline(0.0, color='0.7', lw=0.8)
-    ax2.set_xlabel('time (a.u.)'); ax2.set_ylabel('sub-term averages')
-    ax2.legend(loc='best', frameon=False, ncol=2, fontsize=6)
+    # bottom panel: full C12 with a reference line at 0
+    ax2.axhline(0.0, color='0.7', lw=0.8, ls='--')
+    ax2.plot(t, r['C12'], color='C3', lw=1.6, label=r'$C_{12}(t)$')
+    ax2.fill_between(t, r['C12']-r['C12_SE'], r['C12']+r['C12_SE'], color='C3', alpha=0.3, lw=0)
+    ax2.set_xlabel('time (a.u.)'); ax2.set_ylabel(r'$C_{12}(t)$')
+    ax2.legend(loc='best', frameon=False)
 
     fig.tight_layout(); fig.savefig(out, dpi=200); plt.close(fig)
 
@@ -181,7 +177,8 @@ def _main():
     a = ap.parse_args()
 
     r = compute_pop(a.file, nblocks=a.nblocks, tmax=a.tmax)
-    _write_dat(a.out + '.dat', r)
+    _write_dat(a.out + '_c11.dat', r, 'C11')
+    _write_dat(a.out + '_c12.dat', r, 'C12')
     _plot(a.out + '.png', r)
 
     p = r['params']
@@ -189,7 +186,7 @@ def _main():
     print(f"[pop] params: kvec={p['kvec']} epsil={p['epsil']} lbd={p['lbd']} delta={p['delta']:.6e}")
     print(f"[pop] C11(0)={r['C11'][0]:.6e} +/- {r['C11_SE'][0]:.3e}")
     print(f"[pop] C12(0)={r['C12'][0]:.6e} +/- {r['C12_SE'][0]:.3e}")
-    print(f"[pop] wrote {a.out}.dat and {a.out}.png  ({r['time'].size} time points)")
+    print(f"[pop] wrote {a.out}_c11.dat, {a.out}_c12.dat and {a.out}.png  ({r['time'].size} time points)")
 
 
 if __name__ == '__main__':
