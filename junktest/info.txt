@@ -1,0 +1,31 @@
+#########################################################
+Running RP-MASH Dynamics for 2933 Steps
+#########################################################
+
+--- System ---
+Number of beads        : 8
+Number of nuclear DOF  : 1
+Number of states       : 2
+Nuclear mass(es)       : [1.3]
+Temperature beta       : 1.1
+beta_p (beta/nbds)     : 0.1375
+Random seed            : 0
+
+--- Potential ---
+Potential (potype)     : ET_with_bath
+Potential name         : Marcus ET with bath
+potparams              : [4.0, 0.0, 12.0, 0.039810717055349734, array([0., 1., 2., 2.])]
+
+--- Method ---
+Spin-mapping           : True
+centroid approximation : True
+bead approximation     : False
+Langevin               : None
+
+--- Integrator ---
+Integrator type        : spin_magnus_adaptive
+Time-step (delt)       : 0.003
+Number of steps        : 2933
+Print every (Nprint)   : 1
+Initial time           : 0.0
+small_dt_ratio         : 1
