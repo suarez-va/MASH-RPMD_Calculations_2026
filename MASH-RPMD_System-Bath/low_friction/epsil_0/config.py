@@ -10,7 +10,7 @@ import numpy as np
 
 CONFIG = {
     # ----------------------------------------------------------------- orchestration (workflow)
-    'n_traj'     : 100000,             # number of independent trajectories to run
+    'n_traj'     : 250000,             # number of independent trajectories to run
     'base_seed'  : None,       # int -> reproducible; None -> fresh OS entropy each trajectory
     'grid_dir'   : 'traj_grid',    # subdir (relative to this file) holding traj0/, traj1/, ...
     'ncores'     : 1,             # local cores for `python -m workflow.runner`
@@ -18,7 +18,7 @@ CONFIG = {
 
     # SLURM knobs, used only by `python -m workflow.slurm` (safe to ignore locally)
     'slurm': {
-        'max_tasks'     : 250,
+        'max_tasks'     : 500,
         'job_name'      : 'rpmash_grid',
         'time'          : '24:00:00',
         'cpus_per_task' : 1,
@@ -48,12 +48,12 @@ CONFIG = {
     'bath'  : [0, 1.0, 2.0, 2.0],     # [N_bath, mass, gamma, w_b]; N_bath=0 -> no explicit bath
 
     # integrator / thermostat
-    'intype'         : 'vv',
+    'intype'         : 'spin_magnus_adaptive',
     'delt'           : 0.001,
-    'total_time'     : 20.0,        # a.u.; Nsteps = total_time / delt
-    'Nprint'         : 50,
+    'total_time'     : 15.0,        # a.u.; Nsteps = total_time / delt
+    'Nprint'         : 100,
     'langevin'       : 'generalized',
-    'langevin_params': {'gamma': 2.00, 'Tmem': 10.0, 'Tfluc': 250.0},
+    'langevin_params': {'gamma': 2.00, 'Tmem': 10.0, 'Tfluc': 125.0},
 
     # part-1 equilibration (modified model params) -- build a valid memP + colored-noise state
     # before production, then carry (R,P,spin,memP,Ffluci,Fdiss,noise offset) into part 2.
