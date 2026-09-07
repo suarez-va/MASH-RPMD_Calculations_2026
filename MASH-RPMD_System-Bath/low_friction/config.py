@@ -48,13 +48,13 @@ CONFIG = {
     'bath'  : [0, 1.0, 2.0, 2.0],     # [N_bath, mass, gamma, w_b]; N_bath=0 -> no explicit bath
 
     # integrator / thermostat
-    'intype'         : 'vv',
-    'delt'           : 0.0005,
+    'intype'         : 'spin_magnus_adaptive',
+    'delt'           : 0.001,
     'total_time'     : 5.0,        # a.u.; Nsteps = total_time / delt
     'Nprint'         : 1,
     'langevin'       : 'generalized',
-    'langevin_params': {'gamma': 0.00, 'Tmem': 0.005, 'Tfluc': 0.005},
-    #'langevin_params': {'gamma': 2.00, 'Tmem': 10.0, 'Tfluc': 250.0},
+    #'langevin_params': {'gamma': 0.00, 'Tmem': 0.005, 'Tfluc': 0.005},
+    'langevin_params': {'gamma': 2.00, 'Tmem': 10.0, 'Tfluc': 125.0},
 
     # part-1 equilibration (modified model params) -- build a valid memP + colored-noise state
     # before production, then carry (R,P,spin,memP,Ffluci,Fdiss,noise offset) into part 2.
