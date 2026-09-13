@@ -307,9 +307,9 @@ def _main():
     ap = argparse.ArgumentParser(
         description='C11, C12, K12 and a block analysis of the rate from an RP-MASH data.hdf.')
     ap.add_argument('--file',    default='data.hdf')
-    ap.add_argument('--nblocks', type=int, default=10, help='trajectory blocks (default 10)')
-    ap.add_argument('--fitmin',  type=float, default=20.0, help='fit window start (default 20)')
-    ap.add_argument('--fitmax',  type=float, default=40.0, help='fit window end (default 40)')
+    ap.add_argument('--nblocks', type=int, default=100, help='trajectory blocks (default 100)')
+    ap.add_argument('--fitmin',  type=float, default=5.0, help='fit window start (default 5)')
+    ap.add_argument('--fitmax',  type=float, default=15.0, help='fit window end (default 15)')
     ap.add_argument('--tmax',    type=float, default=None, help='truncate the PLOT to t <= tmax')
     ap.add_argument('--beta',    type=float, default=None, help='override full inverse temperature')
     ap.add_argument('--epsil',   type=float, default=None, help='override driving force epsil')
