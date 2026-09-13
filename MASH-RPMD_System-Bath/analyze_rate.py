@@ -1,6 +1,7 @@
 """
-analyze_rate.py -- C_11(t), C_12(t), the rate integrand K_12(t), and a BLOCK ANALYSIS of the rate,
-all in one pass over data.hdf.  The only output is a single 4-panel figure (analyze_rate.png).
+analyze_rate.py -- C_11(t), C_12(t), M_12(t), the rate integrand K_12(t), and a BLOCK ANALYSIS of
+the rate, all in one pass over data.hdf.  The only output is a single 4-panel figure
+(analyze_rate.png).
 
 This merges what used to be two scripts (analyze_pop.py -> pop_c12.dat -> analyze_k12.py) and adds
 an uncertainty on the extracted rate.
@@ -16,6 +17,12 @@ an uncertainty on the extracted rate.
              + A Sx (1 - B(t) sgn(Sz(t)))
              - (1 + B sgn(Sz)) a(t)Sx(t)
              + |Sz| (1 + B sgn(Sz)) (1 - B(t) sgn(Sz(t))) >
+
+ M_12(t) = < (|Sz(t)| - |Sz|) (1 + B sgn(Sz)) (1 - B(t) sgn(Sz(t))) >
+
+M_12 is exactly the 4th term of C_12 with |Sz| at t=0 replaced by the difference |Sz(t)| - |Sz|;
+the two projector factors are untouched.  That leading factor vanishes at t=0, so M_12(0) == 0
+identically.  Its error bar is the same one-combined-block SE over --nblocks used for C_11/C_12.
 
 A=a(Rbar), B=b(Rbar) are evaluated at the BEAD-MEAN (centroid) position Rbar = mean_b R_b, and
 Sx(t), sgn(Sz(t)), |Sz(t)| are bead means of the per-bead value.  Unprimed quantities are t=0
@@ -35,7 +42,14 @@ with (kvec, epsil, lbd, delta) read from the HDF config_json.
 with errors propagated through the logarithm: u = 1 - C12/P2eq, dK/dC12 = 1/u, so sigma_K =
 sigma_C12 / |u|.  The rate is the slope m of a least-squares line fit of K_12 over [fitmin, fitmax].
 
---- block analysis of the rate (the new part) -------------------------------------------------------
+--- figure layout (analyze_rate.png, the only output) -----------------------------------------------
+
+    top-left     C_11(t) +/- SE      top-right     K_12(t): the trajectory average with its full
+    bottom-left  C_12(t) +/- SE                    line fit, overlaid on the per-block K_12 curves
+                                                   and their per-block fits
+                                     bottom-right  M_12(t) +/- SE
+
+--- block analysis of the rate ----------------------------------------------------------------------
 
 The trajectory axis is split into `nblocks` contiguous blocks (np.array_split, the same split the
 block-SEM uses).  Each block gets its OWN C_12 -> K_12 -> line fit, giving one slope per block:
@@ -143,8 +157,13 @@ def compute(path, nblocks=None, fitmin=20.0, fitmax=40.0, beta_ovr=None, epsil_o
     G11 = ( 1.5 * ASx0 * aSx_t + ASx0 * projt_p + proj0 * aSx_t + abs0 * proj0 * projt_p)
     G12 = (-1.5 * ASx0 * aSx_t + ASx0 * projt_m - proj0 * aSx_t + abs0 * proj0 * projt_m)
 
+    # M_12: C12's 4th term with |Sz| at t=0 replaced by the difference (|Sz(t)| - |Sz|).
+    # The leading factor vanishes at t=0, so M12(0) == 0 identically.
+    GM12 = (absSz - abs0) * proj0 * projt_m
+
     C11 = G11.mean(axis=0);  C11_SE, used_nb = block_sem(G11, nblocks)
     C12 = G12.mean(axis=0);  C12_SE, _       = block_sem(G12, nblocks)
+    M12 = GM12.mean(axis=0); M12_SE, _       = block_sem(GM12, nblocks)
 
     P2eq = 1.0 / (1.0 + np.exp(-beta * epsil))
 
@@ -182,6 +201,7 @@ def compute(path, nblocks=None, fitmin=20.0, fitmax=40.0, beta_ovr=None, epsil_o
         m_bar = b_bar = sigma_m = float('nan')
 
     return dict(time=time, C11=C11, C11_SE=C11_SE, C12=C12, C12_SE=C12_SE,
+                M12=M12, M12_SE=M12_SE,
                 K12=K12, K12_SE=K12_SE, K12_blks=K12_blks,
                 m_full=m_full, b_full=b_full, r_full=r_full, n_full=n_full,
                 slopes=slopes, intercepts=intercepts, blk_m=blk_m, blk_b=blk_b,
@@ -214,11 +234,13 @@ def _block_colors(nb):
 def _plot(out, r, tmax=None):
     t = r['time']
     C11, C11_SE, C12, C12_SE = r['C11'], r['C11_SE'], r['C12'], r['C12_SE']
+    M12, M12_SE              = r['M12'], r['M12_SE']
     K12, K12_SE, K12_blks    = r['K12'], r['K12_SE'], r['K12_blks']
 
     if tmax is not None:                         # truncate for plotting only (fits already done)
         msk = t <= tmax
         t, C11, C11_SE, C12, C12_SE = t[msk], C11[msk], C11_SE[msk], C12[msk], C12_SE[msk]
+        M12, M12_SE = M12[msk], M12_SE[msk]
         K12, K12_SE = K12[msk], K12_SE[msk]
         K12_blks    = [k[msk] for k in K12_blks]
 
@@ -244,55 +266,68 @@ def _plot(out, r, tmax=None):
     a12.set_xlabel('time (a.u.)'); a12.set_ylabel(r'$C_{12}(t)$')
     a12.legend(loc='best', frameon=False)
 
-    # ---------------- top-right: full-average K12 + full fit ----------------
+    # ------- top-right: K12 -- full average + fit AND the per-block curves + fits -------
     ak = ax[0, 1]
     ak.axvspan(fmin, fmax, color='0.92', zorder=0)
     ak.axhline(0.0, color='0.7', lw=0.8, ls='--')
-    ak.plot(t, K12, color='C0', lw=1.6,
-            label=r'$K_{12}(t)=-P_2^{\mathrm{eq}}\ln|1-C_{12}/P_2^{\mathrm{eq}}|$')
-    ak.fill_between(t, K12 - K12_SE, K12 + K12_SE, color='C0', alpha=0.3, lw=0)
-    if np.isfinite(r['m_full']):
-        ak.plot(tf, r['m_full'] * tf + r['b_full'], color='k', lw=2.0, ls='--',
-                label=(fr"fit [{fmin:g},{fmax:g}]:  m={r['m_full']:.4g}, "
-                       fr"b={r['b_full']:.4g}, r={r['r_full']:.4f}"))
-    ak.set_ylabel(r'$K_{12}(t)$')
-    ak.legend(loc='best', frameon=False, fontsize=8)
 
-    # ---------------- bottom-right: per-block K12 + per-block fits ----------------
-    ab = ax[1, 1]
-    ab.axvspan(fmin, fmax, color='0.92', zorder=0)
-    ab.axhline(0.0, color='0.7', lw=0.8, ls='--')
+    # per-block curves first, each with its own fit in the SAME colour (unlabelled)
     colors = _block_colors(len(K12_blks))
     for i, K_b in enumerate(K12_blks):
         c = colors[i]
-        ab.plot(t, K_b, color=c, lw=0.9, alpha=0.55)          # block data
-        if np.isfinite(r['blk_m'][i]):                        # its own fit, SAME color
-            ab.plot(tf, r['blk_m'][i] * tf + r['blk_b'][i], color=c, lw=1.6, alpha=1.0)
-    # average of the block fits, in black, with its equation only
+        ak.plot(t, K_b, color=c, lw=0.9, alpha=0.55)
+        if np.isfinite(r['blk_m'][i]):
+            ak.plot(tf, r['blk_m'][i] * tf + r['blk_b'][i], color=c, lw=1.6, alpha=1.0)
+
+    # the trajectory-averaged K12 sits on top of the block traces
+    ak.plot(t, K12, color='C0', lw=1.6, zorder=4,
+            label=r'$K_{12}(t)=-P_2^{\mathrm{eq}}\ln|1-C_{12}/P_2^{\mathrm{eq}}|$')
+    ak.fill_between(t, K12 - K12_SE, K12 + K12_SE, color='C0', alpha=0.3, lw=0, zorder=3)
+    if np.isfinite(r['m_full']):
+        ak.plot(tf, r['m_full'] * tf + r['b_full'], color='k', lw=2.0, ls='--', zorder=6,
+                label=(fr"fit [{fmin:g},{fmax:g}]:  m={r['m_full']:.4g}, "
+                       fr"b={r['b_full']:.4g}, r={r['r_full']:.4f}"))
+    # average of the block fits: black SOLID, unlabelled, with its equation and the block result
     if np.isfinite(r['m_bar']):
-        ab.plot(tf, r['m_bar'] * tf + r['b_bar'], color='k', lw=2.5, zorder=5)
-        ab.text(0.03, 0.12,
+        ak.plot(tf, r['m_bar'] * tf + r['b_bar'], color='k', lw=2.5, zorder=5)
+        ak.text(0.03, 0.12,
                 rf"$\bar{{y}} = {_fmt_sci(r['m_bar'])}\,x + {r['b_bar']:.4g}$",
-                transform=ab.transAxes, fontsize=10, va='bottom', ha='left')
-        ab.text(0.03, 0.03,
+                transform=ak.transAxes, fontsize=10, va='bottom', ha='left')
+        ak.text(0.03, 0.03,
                 rf"$m = {_fmt_sci(r['m_bar'])} \pm {_fmt_sci(r['sigma_m'])}$",
-                transform=ab.transAxes, fontsize=10, va='bottom', ha='left')
-    ab.set_xlabel('time (a.u.)'); ab.set_ylabel(r'$K_{12}(t)$  (per block)')
+                transform=ak.transAxes, fontsize=10, va='bottom', ha='left')
+    ak.set_ylabel(r'$K_{12}(t)$')
+    ak.legend(loc='best', frameon=False, fontsize=8)   # only the full-average items are labelled
+
     # Blocks that cross the log singularity spike arbitrarily high and would flatten every fit
     # line into an unreadable smear, so clip the view to a robust range (all curves are still
-    # drawn -- this only sets the y-limits). Include the fit lines so they are always in frame.
+    # drawn -- this only sets the y-limits). The pool includes the trajectory-averaged curve and
+    # every fit line so neither can be clipped out of frame by the spiky block percentiles.
     finite = np.concatenate([k[np.isfinite(k)] for k in K12_blks if np.isfinite(k).any()]) \
         if any(np.isfinite(k).any() for k in K12_blks) else np.array([0.0])
     lo, hi = np.percentile(finite, [1.0, 99.0])
+    band = np.concatenate([K12 - K12_SE, K12 + K12_SE])
+    band = band[np.isfinite(band)]
+    if band.size:
+        lo, hi = min(lo, band.min()), max(hi, band.max())
     ends = [v for i in range(len(K12_blks)) if np.isfinite(r['blk_m'][i])
             for v in (r['blk_m'][i] * tf + r['blk_b'][i])]
     if np.isfinite(r['m_bar']):
         ends += list(r['m_bar'] * tf + r['b_bar'])
+    if np.isfinite(r['m_full']):
+        ends += list(r['m_full'] * tf + r['b_full'])
     if ends:
         lo, hi = min(lo, min(ends)), max(hi, max(ends))
     pad = 0.12 * (hi - lo) if hi > lo else 1.0
-    ab.set_ylim(lo - pad, hi + pad)
-    # no legend here, by design
+    ak.set_ylim(lo - pad, hi + pad)
+
+    # ---------------- bottom-right: M12 ----------------
+    am = ax[1, 1]
+    am.axhline(0.0, color='0.7', lw=0.8, ls='--')
+    am.plot(t, M12, color='C2', lw=1.6, label=r'$M_{12}(t)$')
+    am.fill_between(t, M12 - M12_SE, M12 + M12_SE, color='C2', alpha=0.3, lw=0)
+    am.set_xlabel('time (a.u.)'); am.set_ylabel(r'$M_{12}(t)$')
+    am.legend(loc='best', frameon=False)
 
     p = r['params']
     fig.suptitle(f"n_traj={r['n_traj']}, nbds={r['nbds']}, nblocks={r['nblocks']}   "
@@ -305,7 +340,7 @@ def _plot(out, r, tmax=None):
 
 def _main():
     ap = argparse.ArgumentParser(
-        description='C11, C12, K12 and a block analysis of the rate from an RP-MASH data.hdf.')
+        description='C11, C12, M12, K12 and a block analysis of the rate from an RP-MASH data.hdf.')
     ap.add_argument('--file',    default='data.hdf')
     ap.add_argument('--nblocks', type=int, default=10, help='trajectory blocks (default 10)')
     ap.add_argument('--fitmin',  type=float, default=20.0, help='fit window start (default 20)')
@@ -327,6 +362,8 @@ def _main():
     print(f"[rate] C11(0)={r['C11'][0]:.6e} +/- {r['C11_SE'][0]:.3e}")
     print(f"[rate] C12(0)={r['C12'][0]:.6e} +/- {r['C12_SE'][0]:.3e}   "
           f"C12 range [{r['C12'].min():.6e}, {r['C12'].max():.6e}]")
+    print(f"[rate] M12(0)={r['M12'][0]:.6e} (exact 0 expected) +/- {r['M12_SE'][0]:.3e}   "
+          f"M12 range [{r['M12'].min():.6e}, {r['M12'].max():.6e}]")
     print(f"[rate] FULL fit of K12 over t=[{r['fitmin']:g},{r['fitmax']:g}] "
           f"({r['n_full']} pts):  m={r['m_full']:.6g}  b={r['b_full']:.6g}  r={r['r_full']:.6f}")
     print(f"[rate] BLOCK analysis ({r['slopes'].size} usable blocks):  "
