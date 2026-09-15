@@ -29,6 +29,6 @@ def _inherit(relpath):
 CONFIG = _inherit('../config_method.py')
 
 CONFIG.update({
-    'grid_dir'   : 'traj_grid',
+    'grid_dir'   : 'therm_grid',
     'system_file': '../../../therm.py',
 })

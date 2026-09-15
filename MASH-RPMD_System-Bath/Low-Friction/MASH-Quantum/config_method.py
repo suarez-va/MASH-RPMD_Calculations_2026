@@ -29,7 +29,7 @@ CONFIG = _inherit('../config_base.py')
 
 CONFIG.update({
     # ------------------------------------------------------------------ ring polymer
-    'nbds' : 8,                      # ring-polymer beads
+    'nbds' : 6,                      # ring-polymer beads
 
     # ------------------------------------------------------------------ integrator
     'delt' : 0.001,
@@ -41,7 +41,7 @@ CONFIG.update({
     'therm_epsil' : -100.0,        # driving force during the burn-in
 
     # ------------------------------------------------------------------ part 2: production
-    'traj_time' : 15.0,            # a.u.; Nsteps = traj_time / delt
+    'traj_time' : 5.0,            # a.u.; Nsteps = traj_time / delt
     'Nprint'    : 25,
 
     # ------------------------------------------------------------------ thermostat
@@ -49,4 +49,4 @@ CONFIG.update({
 })
 
 # gamma comes from config_base.py so the friction constant is written down exactly once.
-CONFIG['langevin_params'] = {'gamma': CONFIG['gamma'], 'Tmem': 25.0, 'Tfluc': 40.0}
+CONFIG['langevin_params'] = {'gamma': CONFIG['gamma'], 'Tmem': 25.0, 'Tfluc': 30.0}

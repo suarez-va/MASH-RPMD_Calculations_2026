@@ -1,0 +1,22 @@
+---------------------------------------
+Begin Slurm Prolog: Sep-15-2026 10:12:40
+Job ID:    13217953
+User ID:   vsuarez6
+Account:   gts-jkretchmer3-chemx
+Job name:  rpmash_grid
+Partition: cpu-small
+QOS:       inferno
+---------------------------------------
+---------------------------------------
+Begin Slurm Epilog: Sep-15-2026 10:12:48
+Job ID:        13217953
+Array Job ID:  13217939_13
+User ID:       vsuarez6
+Account:       gts-jkretchmer3-chemx
+Job name:      rpmash_grid
+Resources:     cpu=1,mem=8G,node=1
+Rsrc Used:     cput=00:00:08,vmem=0,walltime=00:00:08,mem=50696K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-002-25-1
+---------------------------------------
