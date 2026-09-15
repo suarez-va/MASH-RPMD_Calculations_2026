@@ -18,14 +18,14 @@ CONFIG = {
 
     # SLURM knobs, used only by `python -m workflow.slurm` (safe to ignore locally)
     'slurm': {
-        'max_tasks'     : 495,
+        'max_tasks'     : 500,
         'job_name'      : 'rpmash_grid',
-        'time'          : '24:00:00',
+        'time'          : '9:00:00',
         'cpus_per_task' : 1,
         'max_concurrent': None,        # e.g. 50 -> "--array=0-N%50"
         'partition'     : None,
         'account'       : 'gts-jkretchmer3-chemx',
-        'mem'           : '16GB',
+        'mem'           : '8GB',
         'python'        : 'python',
         'extra_directives': [],        # raw "#SBATCH ..." lines if you need something uncommon
         'extra_commands': [
@@ -45,14 +45,14 @@ CONFIG = {
     'epsil' : -100.0,
     'lbd'   : 12.0,
     'delta' : 10**(-7),
-    'bath'  : [0, 1.0, 2.0, 2.0],     # [N_bath, mass, gamma, w_b]; N_bath=0 -> no explicit bath
+    'bath'  : [0, 1.0, 64.0, 2.0],     # [N_bath, mass, gamma, w_b]; N_bath=0 -> no explicit bath
 
     # integrator / thermostat
     #'intype'         : 'vv',
     'intype'         : 'spin_magnus_adaptive',
     'delt'           : 0.001,
-    'total_time'     : 15.,        # a.u.; Nsteps = total_time / delt
+    'total_time'     : 30.,        # a.u.; Nsteps = total_time / delt
     'Nprint'         : 25,
     'langevin'       : 'generalized',
-    'langevin_params': {'gamma': 2.00, 'Tmem': 10.00, 'Tfluc': 15.0},
+    'langevin_params': {'gamma': 64.00, 'Tmem': 25.00, 'Tfluc': 30.0},
 }
