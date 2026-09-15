@@ -1,10 +1,11 @@
 """
 snip_data.py -- truncate a consolidated data.hdf so that it stops at an earlier final time.
 
-Part 2 of traj.py runs production for Nprod = round(cfg['total_time'] / delt) steps -- it uses
-total_time DIRECTLY (it does not subtract equil_time). Runs configured with total_time=40.0
-therefore produced 40 a.u. of production when only 15 a.u. was wanted. Rather than regenerate the
-raw trajectories, this script cuts an already-consolidated data.hdf down along the time axis.
+Production runs for Nprod = round(cfg['traj_time'] / delt) steps -- the run length is used
+DIRECTLY (the thermalization time is not subtracted). Runs configured for 40 a.u. therefore
+produced 40 a.u. of production when only 15 a.u. was wanted. Rather than regenerate the raw
+trajectories, this script cuts an already-consolidated data.hdf down along the time axis.
+(Older files carry this as `total_time`; both spellings are handled.)
 
 The result is meant to be INDISTINGUISHABLE from a run that genuinely stopped at the shorter time:
 
@@ -13,7 +14,8 @@ The result is meant to be INDISTINGUISHABLE from a run that genuinely stopped at
   * chunks become (1,) + <new per-trajectory shape>, exactly what workflow.consolidate would have
     written for a run of that length,
   * the source's compression/shuffle/fletcher32 filters and dtype are mirrored,
-  * config_json['total_time'] is set to the new final time,
+  * config_json's run-length key (traj_time, or total_time in older files) is set to the new
+    final time,
   * every other attribute -- root and per-dataset -- is copied verbatim, and NO provenance
     attributes are added (they would make the file identifiable as snipped).
 
@@ -44,22 +46,29 @@ import h5py
 
 
 def _new_config_json(fin, t_end, n_keep):
-    """Copy config_json with total_time set to the new final time. Returns (json_str, old, cfg)."""
-    cfg = json.loads(fin.attrs['config_json'])
-    old_total = cfg.get('total_time')
-    cfg['total_time'] = t_end
+    """Copy config_json with the run-length key set to the new final time.
 
-    # A genuine run of this length would satisfy round(total_time/delt)//Nprint + 1 == rows.
+    Returns (json_str, key, old_value, cfg) -- `key` is whichever run-length key the file uses.
+    """
+    cfg = json.loads(fin.attrs['config_json'])
+    # The run-length key was renamed total_time -> traj_time when the configs were split into a
+    # hierarchy; data.hdf files written before that still carry total_time. Update whichever key
+    # this file actually has, and do not introduce the other one.
+    key = 'traj_time' if 'traj_time' in cfg else 'total_time'
+    old_total = cfg.get(key)
+    cfg[key] = t_end
+
+    # A genuine run of this length would satisfy round(traj_time/delt)//Nprint + 1 == rows.
     delt   = cfg.get('delt')
     nprint = cfg.get('Nprint')
     if delt and nprint:
         predicted = round(t_end / float(delt)) // int(nprint) + 1
         if predicted != n_keep:
-            print(f'[snip] WARNING: a real run with total_time={t_end:g}, delt={delt:g}, '
+            print(f'[snip] WARNING: a real run with {key}={t_end:g}, delt={delt:g}, '
                   f'Nprint={nprint} would have {predicted} rows, but the cut keeps {n_keep}. '
                   f'tmax is not a clean stopping point for this grid -- the output will not look '
                   f'like a genuine run.')
-    return json.dumps(cfg, default=str), old_total, cfg
+    return json.dumps(cfg, default=str), key, old_total, cfg
 
 
 def snip(path, tmax=15.0, out=None, force=False, batch=256):
@@ -88,12 +97,12 @@ def snip(path, tmax=15.0, out=None, force=False, batch=256):
                              f'({time[-1]:g}); there is nothing to cut')
         t_end = float(time[n_keep - 1])
 
-        cfg_json, old_total, cfg = _new_config_json(fin, t_end, n_keep)
+        cfg_json, key, old_total, cfg = _new_config_json(fin, t_end, n_keep)
 
         print(f'[snip] {src}')
         print(f'[snip] keeping {n_keep} of {T} rows  (t = {time[0]:g} .. {t_end:g}, '
               f'dropping {T - n_keep} rows out to t = {time[-1]:g})')
-        print(f'[snip] total_time {old_total} -> {t_end:g}')
+        print(f'[snip] {key} {old_total} -> {t_end:g}')
 
         with h5py.File(out, 'w') as fout:
             # ---- root attrs verbatim, in source order, config_json swapped ----
