@@ -10,11 +10,11 @@ import numpy as np
 
 CONFIG = {
     # ----------------------------------------------------------------- orchestration (workflow)
-    'n_traj'     : 2500,             # number of independent trajectories to run
+    'n_traj'     : 100000,             # number of independent trajectories to run
     'base_seed'  : None,       # int -> reproducible; None -> fresh OS entropy each trajectory
     'grid_dir'   : 'traj_grid',    # subdir (relative to this file) holding traj0/, traj1/, ...
     'ncores'     : 1,             # local cores for `python -m workflow.runner`
-    'system_file': 'traj.py',    # the module providing run_trajectory(cfg, seed)
+    'system_file': '../../../traj.py',    # the module providing run_trajectory(cfg, seed)
 
     # SLURM knobs, used only by `python -m workflow.slurm` (safe to ignore locally)
     'slurm': {
@@ -25,7 +25,7 @@ CONFIG = {
         'max_concurrent': None,        # e.g. 50 -> "--array=0-N%50"
         'partition'     : None,
         'account'       : 'gts-jkretchmer3-chemx',
-        'mem'           : '16GB',
+        'mem'           : '8GB',
         'python'        : 'python',
         'extra_directives': [],        # raw "#SBATCH ..." lines if you need something uncommon
         'extra_commands': [
@@ -34,25 +34,30 @@ CONFIG = {
     },
 
     # ----------------------------------------------------------------- physics (read by traj.py)
-    'nbds'    : 6,
+    'nbds'    : 1,
     'nnuc'    : 1,
     'nstates' : 2,
-    'mass'    : [1.0],
-    'beta'    : 1.0,
+    'mass'    : [1.00],
+    'beta'    : 1.00,
 
     # Marcus ET model (atomic units)
-    'kvec'  : 4.0,
-    'epsil' : -100.0,
-    'lbd'   : 12.0,
-    'delta' : 10**(-7),
-    'bath'  : [0, 1.0, 2.0, 2.0],     # [N_bath, mass, gamma, w_b]; N_bath=0 -> no explicit bath
+    'kvec'  : 4.00,
+    'epsil' : 14.00,
+    'lbd'   : 7.00,
+    'delta' : 10**(-1.40),
+    'bath'  : [0, 1.00, 2.00, 2.00],     # [N_bath, mass, gamma, w_b]; N_bath=0 -> no explicit bath
 
     # integrator / thermostat
-    #'intype'         : 'vv',
     'intype'         : 'spin_magnus_adaptive',
     'delt'           : 0.001,
-    'total_time'     : 15.,        # a.u.; Nsteps = total_time / delt
+    'total_time'     : 15.0,        # a.u.; Nsteps = total_time / delt
     'Nprint'         : 25,
     'langevin'       : 'generalized',
-    'langevin_params': {'gamma': 2.00, 'Tmem': 10.00, 'Tfluc': 15.0},
+    'langevin_params': {'gamma': 2.00, 'Tmem': 25.0, 'Tfluc': 40.0},
+
+    # part-1 equilibration (modified model params) -- build a valid memP + colored-noise state
+    # before production, then carry (R,P,spin,memP,Ffluci,Fdiss,noise offset) into part 2.
+    'equil_time'  : 25.0,   # a.u.; make >= a few * Tmem (=10) so memP fully fills and (R,P) relax
+    'delta_equil' : 10**(-7.0),    # 0 => NAC=0 => spin frozen on the donor while the memory builds
+    'epsil_equil' : -100.0,    # driving force during equilibration
 }

@@ -1,6 +1,7 @@
 """
-analyze_rate.py -- C_11(t), C_12(t), M_12(t), the rate integrand K_12(t), and a BLOCK ANALYSIS of
-the rate, all in one pass over data.hdf.  The only output is a single 4-panel figure
+analyze_rate.py -- C_11(t), C_12(t), M_12(t), the complex k(t) and Mk(t), the rate integrand
+K_12(t), and a BLOCK ANALYSIS of
+the rate, all in one pass over data.hdf.  The only output is a single 6-panel figure
 (analyze_rate.png).
 
 This merges what used to be two scripts (analyze_pop.py -> pop_c12.dat -> analyze_k12.py) and adds
@@ -24,6 +25,20 @@ M_12 is exactly the 4th term of C_12 with |Sz| at t=0 replaced by the difference
 the two projector factors are untouched.  That leading factor vanishes at t=0, so M_12(0) == 0
 identically.  Its error bar is the same one-combined-block SE over --nblocks used for C_11/C_12.
 
+--- complex correlation functions (i is the imaginary unit) -----------------------------------------
+
+ k(t)  = delta * < 1.5 (i B Sx + Sy) (A(t) Sx(t))
+                  -   (i B Sx + Sy) (1 - B(t) sgn(Sz(t)))
+                  -   (i A sgn(Sz)) (A(t) Sx(t))
+                  +   |Sz| (i A sgn(Sz)) (1 - B(t) sgn(Sz(t))) >
+
+ Mk(t) = delta * < (|Sz(t)| - |Sz|) (i A sgn(Sz)) (1 - B(t) sgn(Sz(t))) >
+
+Mk stands to k's 4th term exactly as M_12 stands to C_12's, so Mk(0) == 0 identically.  Note k's
+sign pattern (+1.5, -1, -1, +1) is NOT C_12's (-1.5, +1, -1, +1).  Because np.std on a complex
+array collapses to one real number, the block SE is taken separately on the real and imaginary
+parts; the magnitude band is propagated as sigma_|z| = sqrt((Re*s_Re)^2 + (Im*s_Im)^2)/|z|.
+
 A=a(Rbar), B=b(Rbar) are evaluated at the BEAD-MEAN (centroid) position Rbar = mean_b R_b, and
 Sx(t), sgn(Sz(t)), |Sz(t)| are bead means of the per-bead value.  Unprimed quantities are t=0
 (row 0 of `time`, a prepared initial condition -- not a sliding time origin).  <...> averages over
@@ -44,10 +59,12 @@ sigma_C12 / |u|.  The rate is the slope m of a least-squares line fit of K_12 ov
 
 --- figure layout (analyze_rate.png, the only output) -----------------------------------------------
 
-    top-left     C_11(t) +/- SE      top-right     K_12(t): the trajectory average with its full
-    bottom-left  C_12(t) +/- SE                    line fit, overlaid on the per-block K_12 curves
-                                                   and their per-block fits
-                                     bottom-right  M_12(t) +/- SE
+                col 0                col 1                        col 2
+    row 0   C_11(t) +/- SE       k(t):  Re / Im / |k|        Mk(t): Re / Im / |Mk|
+    row 1   C_12(t) +/- SE       K_12(t): trajectory avg     M_12(t) +/- SE
+                                 + full line fit, overlaid
+                                 on the per-block curves
+                                 and their per-block fits
 
 --- block analysis of the rate ----------------------------------------------------------------------
 
@@ -111,6 +128,14 @@ def k12_from_c12(C12, P2eq, C12_SE=None):
     return K12, SE, u
 
 
+def _mag_and_se(z, se_re, se_im):
+    """|z| and its error propagated from the real/imaginary block SEs. |z|=0 -> error 0."""
+    mag = np.abs(z)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        se = np.sqrt((z.real * se_re)**2 + (z.imag * se_im)**2) / mag
+    return mag, np.where(np.isfinite(se), se, 0.0)
+
+
 def line_fit(time, K12, fitmin, fitmax):
     """Least-squares m*t+b of K12 over [fitmin, fitmax], finite points only. NaNs if too few."""
     mask = (time >= fitmin) & (time <= fitmax) & np.isfinite(K12)
@@ -131,6 +156,7 @@ def compute(path, nblocks=None, fitmin=20.0, fitmax=40.0, beta_ovr=None, epsil_o
 
         R  = f['nucR'][:, :, :, 0]              # (n, T, nbds)
         Sx = f['mapSx'][:]                      # (n, T, nbds)
+        Sy = f['mapSy'][:]                      # (n, T, nbds)
         Sz = f['mapSz'][:]                      # (n, T, nbds)
 
     n_traj = R.shape[0]
@@ -141,11 +167,12 @@ def compute(path, nblocks=None, fitmin=20.0, fitmax=40.0, beta_ovr=None, epsil_o
     Rbar  = R.mean(axis=2)
     A, B  = a_b_functions(Rbar, kvec, epsil, lbd, delta)
     Sx_   = Sx.mean(axis=2)                     # Sx(t)
+    Sy_   = Sy.mean(axis=2)                     # Sy(t)
     sgnSz = np.sign(Sz).mean(axis=2)            # sgn(Sz(t))  in [-1,1]
     absSz = np.abs(Sz).mean(axis=2)             # |Sz(t)|
 
     # ---- t=0 scalars (row 0), shape (n,1) to broadcast against (n,T) ----
-    A0, Sx0, B0, sgn0, abs0 = (X[:, :1] for X in (A, Sx_, B, sgnSz, absSz))
+    A0, Sx0, Sy0, B0, sgn0, abs0 = (X[:, :1] for X in (A, Sx_, Sy_, B, sgnSz, absSz))
 
     aSx_t   = A * Sx_                            # a(t) Sx(t)
     proj0   = 1.0 + B0 * sgn0                    # (1 + B sgn(Sz))  at t=0
@@ -161,9 +188,26 @@ def compute(path, nblocks=None, fitmin=20.0, fitmax=40.0, beta_ovr=None, epsil_o
     # The leading factor vanishes at t=0, so M12(0) == 0 identically.
     GM12 = (absSz - abs0) * proj0 * projt_m
 
+    # ---- complex brackets: k(t) and Mk(t).  'i' is the imaginary unit. ----
+    W0 = 1j * B0 * Sx0 + Sy0                     # (i B Sx + Sy)  at t=0
+    Z0 = 1j * A0 * sgn0                          # (i A sgn(Sz))  at t=0
+
+    # NOTE the sign pattern (+1.5, -1, -1, +1) is NOT C12's (-1.5, +1, -1, +1).
+    Gk  = delta * (1.5 * W0 * aSx_t - W0 * projt_m - Z0 * aSx_t + abs0 * Z0 * projt_m)
+    # Mk is k's 4th term with |Sz| -> (|Sz(t)| - |Sz|), so Mk(0) == 0 identically.
+    GMk = delta * (absSz - abs0) * Z0 * projt_m
+
     C11 = G11.mean(axis=0);  C11_SE, used_nb = block_sem(G11, nblocks)
     C12 = G12.mean(axis=0);  C12_SE, _       = block_sem(G12, nblocks)
     M12 = GM12.mean(axis=0); M12_SE, _       = block_sem(GM12, nblocks)
+
+    # complex: block_sem on a complex array collapses to ONE real number, so split Re/Im
+    kt = Gk.mean(axis=0)
+    kt_SE_re, _ = block_sem(Gk.real,  nblocks);  kt_SE_im, _ = block_sem(Gk.imag,  nblocks)
+    Mk = GMk.mean(axis=0)
+    Mk_SE_re, _ = block_sem(GMk.real, nblocks);  Mk_SE_im, _ = block_sem(GMk.imag, nblocks)
+    kt_mag, kt_mag_SE = _mag_and_se(kt, kt_SE_re, kt_SE_im)
+    Mk_mag, Mk_mag_SE = _mag_and_se(Mk, Mk_SE_re, Mk_SE_im)
 
     P2eq = 1.0 / (1.0 + np.exp(-beta * epsil))
 
@@ -202,6 +246,10 @@ def compute(path, nblocks=None, fitmin=20.0, fitmax=40.0, beta_ovr=None, epsil_o
 
     return dict(time=time, C11=C11, C11_SE=C11_SE, C12=C12, C12_SE=C12_SE,
                 M12=M12, M12_SE=M12_SE,
+                kt=kt, kt_SE_re=kt_SE_re, kt_SE_im=kt_SE_im,
+                kt_mag=kt_mag, kt_mag_SE=kt_mag_SE,
+                Mk=Mk, Mk_SE_re=Mk_SE_re, Mk_SE_im=Mk_SE_im,
+                Mk_mag=Mk_mag, Mk_mag_SE=Mk_mag_SE,
                 K12=K12, K12_SE=K12_SE, K12_blks=K12_blks,
                 m_full=m_full, b_full=b_full, r_full=r_full, n_full=n_full,
                 slopes=slopes, intercepts=intercepts, blk_m=blk_m, blk_b=blk_b,
@@ -231,11 +279,27 @@ def _block_colors(nb):
     return [plt.cm.viridis(x) for x in np.linspace(0.0, 0.9, nb)]
 
 
+def _complex_panel(axp, t, z, se_re, se_im, mag, mag_se, label):
+    """Re / Im / |.| of a complex correlation function, each with its own +/- SE band."""
+    axp.axhline(0.0, color='0.7', lw=0.8, ls='--')
+    axp.plot(t, z.real, color='C0', lw=1.4, label=rf'$\mathrm{{Re}}\,{label}$')
+    axp.fill_between(t, z.real - se_re, z.real + se_re, color='C0', alpha=0.3, lw=0)
+    axp.plot(t, z.imag, color='C1', lw=1.4, label=rf'$\mathrm{{Im}}\,{label}$')
+    axp.fill_between(t, z.imag - se_im, z.imag + se_im, color='C1', alpha=0.3, lw=0)
+    axp.plot(t, mag, color='k', lw=1.4, label=rf'$|{label}|$')
+    axp.fill_between(t, mag - mag_se, mag + mag_se, color='k', alpha=0.2, lw=0)
+    axp.legend(loc='best', frameon=False, fontsize=9)
+
+
 def _plot(out, r, tmax=None):
     t = r['time']
     C11, C11_SE, C12, C12_SE = r['C11'], r['C11_SE'], r['C12'], r['C12_SE']
     M12, M12_SE              = r['M12'], r['M12_SE']
     K12, K12_SE, K12_blks    = r['K12'], r['K12_SE'], r['K12_blks']
+    kt, kt_re, kt_im, kt_mag, kt_mag_SE = (r['kt'], r['kt_SE_re'], r['kt_SE_im'],
+                                           r['kt_mag'], r['kt_mag_SE'])
+    Mk, Mk_re, Mk_im, Mk_mag, Mk_mag_SE = (r['Mk'], r['Mk_SE_re'], r['Mk_SE_im'],
+                                           r['Mk_mag'], r['Mk_mag_SE'])
 
     if tmax is not None:                         # truncate for plotting only (fits already done)
         msk = t <= tmax
@@ -243,12 +307,16 @@ def _plot(out, r, tmax=None):
         M12, M12_SE = M12[msk], M12_SE[msk]
         K12, K12_SE = K12[msk], K12_SE[msk]
         K12_blks    = [k[msk] for k in K12_blks]
+        kt, kt_re, kt_im, kt_mag, kt_mag_SE = (X[msk] for X in
+                                               (kt, kt_re, kt_im, kt_mag, kt_mag_SE))
+        Mk, Mk_re, Mk_im, Mk_mag, Mk_mag_SE = (X[msk] for X in
+                                               (Mk, Mk_re, Mk_im, Mk_mag, Mk_mag_SE))
 
     fmin, fmax = r['fitmin'], r['fitmax']
     tf = np.array([fmin, fmax])
 
-    # sharex=True across all four panels; sharey left at its default (False)
-    fig, ax = plt.subplots(2, 2, figsize=(13, 9), sharex=True)
+    # sharex=True across all six panels; sharey left at its default (False)
+    fig, ax = plt.subplots(2, 3, figsize=(19, 9), sharex=True)
 
     # ---------------- top-left: C11 ----------------
     a11 = ax[0, 0]
@@ -266,8 +334,8 @@ def _plot(out, r, tmax=None):
     a12.set_xlabel('time (a.u.)'); a12.set_ylabel(r'$C_{12}(t)$')
     a12.legend(loc='best', frameon=False)
 
-    # ------- top-right: K12 -- full average + fit AND the per-block curves + fits -------
-    ak = ax[0, 1]
+    # ---- bottom-middle: K12 -- full average + fit AND the per-block curves + fits ----
+    ak = ax[1, 1]
     ak.axvspan(fmin, fmax, color='0.92', zorder=0)
     ak.axhline(0.0, color='0.7', lw=0.8, ls='--')
 
@@ -296,7 +364,7 @@ def _plot(out, r, tmax=None):
         ak.text(0.03, 0.03,
                 rf"$m = {_fmt_sci(r['m_bar'])} \pm {_fmt_sci(r['sigma_m'])}$",
                 transform=ak.transAxes, fontsize=10, va='bottom', ha='left')
-    ak.set_ylabel(r'$K_{12}(t)$')
+    ak.set_xlabel('time (a.u.)'); ak.set_ylabel(r'$K_{12}(t)$')
     ak.legend(loc='best', frameon=False, fontsize=8)   # only the full-average items are labelled
 
     # Blocks that cross the log singularity spike arbitrarily high and would flatten every fit
@@ -322,12 +390,20 @@ def _plot(out, r, tmax=None):
     ak.set_ylim(lo - pad, hi + pad)
 
     # ---------------- bottom-right: M12 ----------------
-    am = ax[1, 1]
+    am = ax[1, 2]
     am.axhline(0.0, color='0.7', lw=0.8, ls='--')
     am.plot(t, M12, color='C2', lw=1.6, label=r'$M_{12}(t)$')
     am.fill_between(t, M12 - M12_SE, M12 + M12_SE, color='C2', alpha=0.3, lw=0)
     am.set_xlabel('time (a.u.)'); am.set_ylabel(r'$M_{12}(t)$')
     am.legend(loc='best', frameon=False)
+
+    # ---------------- top-middle: k(t) (complex) ----------------
+    _complex_panel(ax[0, 1], t, kt, kt_re, kt_im, kt_mag, kt_mag_SE, r'k(t)')
+    ax[0, 1].set_ylabel(r'$k(t)$')
+
+    # ---------------- top-right: Mk(t) (complex) ----------------
+    _complex_panel(ax[0, 2], t, Mk, Mk_re, Mk_im, Mk_mag, Mk_mag_SE, r'M_k(t)')
+    ax[0, 2].set_ylabel(r'$M_k(t)$')
 
     p = r['params']
     fig.suptitle(f"n_traj={r['n_traj']}, nbds={r['nbds']}, nblocks={r['nblocks']}   "
@@ -340,7 +416,7 @@ def _plot(out, r, tmax=None):
 
 def _main():
     ap = argparse.ArgumentParser(
-        description='C11, C12, M12, K12 and a block analysis of the rate from an RP-MASH data.hdf.')
+        description='C11, C12, M12, k, Mk, K12 and a block analysis of the rate from an RP-MASH data.hdf.')
     ap.add_argument('--file',    default='data.hdf')
     ap.add_argument('--nblocks', type=int, default=100, help='trajectory blocks (default 100)')
     ap.add_argument('--fitmin',  type=float, default=5.0, help='fit window start (default 5)')
@@ -364,6 +440,10 @@ def _main():
           f"C12 range [{r['C12'].min():.6e}, {r['C12'].max():.6e}]")
     print(f"[rate] M12(0)={r['M12'][0]:.6e} (exact 0 expected) +/- {r['M12_SE'][0]:.3e}   "
           f"M12 range [{r['M12'].min():.6e}, {r['M12'].max():.6e}]")
+    print(f"[rate] k(0)={r['kt'][0].real:+.6e}{r['kt'][0].imag:+.6e}j   "
+          f"|k| range [{r['kt_mag'].min():.6e}, {r['kt_mag'].max():.6e}]")
+    print(f"[rate] Mk(0)={r['Mk'][0].real:+.6e}{r['Mk'][0].imag:+.6e}j (exact 0 expected)   "
+          f"|Mk| range [{r['Mk_mag'].min():.6e}, {r['Mk_mag'].max():.6e}]")
     print(f"[rate] FULL fit of K12 over t=[{r['fitmin']:g},{r['fitmax']:g}] "
           f"({r['n_full']} pts):  m={r['m_full']:.6g}  b={r['b_full']:.6g}  r={r['r_full']:.6f}")
     print(f"[rate] BLOCK analysis ({r['slopes'].size} usable blocks):  "
