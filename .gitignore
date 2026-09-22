@@ -1,5 +1,6 @@
 __pycache__/
 traj_grid/
+therm_grid/
 *.hdf
 *.dat
 *.sh

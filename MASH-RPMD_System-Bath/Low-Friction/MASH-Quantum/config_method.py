@@ -1,9 +1,9 @@
 """
-config_method.py -- level 2 of 3: the physics specific to the quantum (ring-polymer) tree.
+config_method.py -- level 2 of 3: the physics specific to the classical (1-bead) tree.
 
 Inherits Low-Friction/config_base.py and adds everything that distinguishes this method and fixes
 the two run stages' timings.  The ONLY value that differs between the Classical and Quantum copies
-of this file is `nbds` (8 here).
+of this file is `nbds` (1 here).
 
 Consumed by both stages:
   therm_time / therm_delta / therm_epsil  -> part 1, the shared thermalization (therm.py)
@@ -29,7 +29,7 @@ CONFIG = _inherit('../config_base.py')
 
 CONFIG.update({
     # ------------------------------------------------------------------ ring polymer
-    'nbds' : 6,                      # ring-polymer beads
+    'nbds' : 6,                      # classical limit: a single bead
 
     # ------------------------------------------------------------------ integrator
     'delt' : 0.001,

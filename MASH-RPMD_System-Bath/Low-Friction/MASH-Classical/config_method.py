@@ -36,7 +36,7 @@ CONFIG.update({
 
     # ------------------------------------------------------------------ part 1: thermalization
     # Modified model params used only while the memory buffer fills and (R,P) relax.
-    'therm_time'  : 25.0,          # a.u. of GLE burn-in; >= a few * Tmem so memP fully fills
+    'therm_time'  : 1.0,          # a.u. of GLE burn-in; >= a few * Tmem so memP fully fills
     'therm_delta' : 10**(-7.0),    # ~0 => NAC~0 => spin frozen on the donor during the burn-in
     'therm_epsil' : -100.0,        # driving force during the burn-in
 
@@ -49,4 +49,4 @@ CONFIG.update({
 })
 
 # gamma comes from config_base.py so the friction constant is written down exactly once.
-CONFIG['langevin_params'] = {'gamma': CONFIG['gamma'], 'Tmem': 25.0, 'Tfluc': 40.0}
+CONFIG['langevin_params'] = {'gamma': CONFIG['gamma'], 'Tmem': 1.0, 'Tfluc': 16.0}

@@ -17,7 +17,7 @@ config_method.py, so the friction constant is written down exactly once.
 
 CONFIG = {
     # ----------------------------------------------------------------- orchestration (workflow)
-    'n_traj'    : 1000,      # number of independent trajectories to run
+    'n_traj'    : 100000,      # number of independent trajectories to run
     'base_seed' : None,        # int -> reproducible; None -> fresh OS entropy each trajectory
     'ncores'    : 1,           # local cores for `python -m workflow.runner`
 
@@ -46,11 +46,13 @@ CONFIG = {
     # ----------------------------------------------------------------- Marcus ET model (a.u.)
     # `epsil` is NOT here -- it is the one thing each epsil_*/config_traj.py sets for itself.
     'kvec'  : 4.00,
-    'lbd'   : 7.00,
+    'lbd'   : 10.00,
     'delta' : 10**(-1.40),
     'bath'  : [0, 1.00, 2.00, 2.00],     # [N_bath, mass, gamma, w_b]; N_bath=0 -> no explicit bath
 
     # ----------------------------------------------------------------- integrator / thermostat
-    'intype' : 'spin_magnus_adaptive',
-    'gamma'  : 2.00,           # friction constant; config_method.py feeds this into langevin_params
+    'intype'    : 'spin_magnus_adaptive',
+    'Tjump'     : 1.0,
+    'full_jump' : False,
+    'gamma'     : 2.00,           # friction constant; config_method.py feeds this into langevin_params
 }

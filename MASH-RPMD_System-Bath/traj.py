@@ -22,7 +22,7 @@ re-equilibrating.  Run the thermalize stage first:
     cd <tree>/thermalize && python -m workflow.runner --config config_therm.py
     cd <tree>/epsil_0.00 && python -m workflow.runner --config config_traj.py
 
-`therm_dir` (default '../thermalize') is resolved relative to the epsil run directory.
+`therm_dir` (default '../therm') is resolved relative to the epsil run directory.
 """
 
 import os
@@ -49,7 +49,8 @@ def _build(cfg, potparams, nucR, nucP, seed, **restart):
         beta=cfg['beta'], mass=np.asarray(cfg['mass'], float),
         potype='ET_with_bath', potparams=potparams, nucR=nucR, nucP=nucP,
         spinmap_bool=True, centroid_bool=True, bead_bool=False,
-        langevin=cfg['langevin'], langevin_params=cfg['langevin_params'], seed=seed, **restart)
+        langevin=cfg['langevin'], langevin_params=cfg['langevin_params'],
+        Tjump=cfg['Tjump'], full_jump=cfg['full_jump'], seed=seed, **restart)
 
 
 def _load_therm(path, cfg):
@@ -112,8 +113,10 @@ def run_trajectory(cfg, seed):
 
     # cwd is <epsil run dir>/traj_grid/traj<idx>  ->  the run dir is two levels up
     run_dir   = os.path.abspath(os.path.join(os.getcwd(), os.pardir, os.pardir))
-    therm_dir = os.path.abspath(os.path.join(run_dir, cfg.get('therm_dir', '../thermalize')))
-    path      = os.path.join(therm_dir, f'therm{idx:05d}.hdf')
+    therm_dir = os.path.abspath(os.path.join(run_dir, cfg.get('therm_dir', '../therm')))
+    path      = os.path.join(therm_dir, f'therm_{idx:06d}.hdf')
+    #SCRATCH_DIR = '/storage/home/hcoda1/8/vsuarez6/scratch/'
+    #path      = os.path.join(SCRATCH_DIR, f'therm/therm_{idx:06d}.hdf')
 
     nucR, nucP, memP, Ffluci = _load_therm(path, cfg)
     print(f'[traj] traj {idx} restarting from {path}', flush=True)
