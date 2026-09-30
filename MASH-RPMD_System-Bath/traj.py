@@ -116,6 +116,7 @@ def run_trajectory(cfg, seed):
     therm_dir = os.path.abspath(os.path.join(run_dir, cfg.get('therm_dir', '../therm')))
     path      = os.path.join(therm_dir, f'therm_{idx:06d}.hdf')
     #SCRATCH_DIR = '/storage/home/hcoda1/8/vsuarez6/scratch/'
+    #SCRATCH_DIR = '/storage/scratch1/8/vsuarez6/'
     #path      = os.path.join(SCRATCH_DIR, f'therm/therm_{idx:06d}.hdf')
 
     nucR, nucP, memP, Ffluci = _load_therm(path, cfg)

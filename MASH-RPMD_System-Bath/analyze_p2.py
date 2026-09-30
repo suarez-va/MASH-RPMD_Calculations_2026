@@ -291,8 +291,8 @@ def _plot(out, r, tmax=None):
 
     # ---------------- left: P2 ----------------
     a0 = ax[0]
-    a0.axhline(0.0, color='0.7', lw=0.8, ls='--')
-    a0.axhline(r['P2eq'], color='0.5', lw=0.9, ls=':', label=r'$P_2^{\mathrm{eq}}$')
+    #a0.axhline(0.0, color='0.7', lw=0.8, ls='--')
+    #a0.axhline(r['P2eq'], color='0.5', lw=0.9, ls=':', label=r'$P_2^{\mathrm{eq}}$')
     a0.plot(t, P2, color='C0', lw=1.6, label=r'$P_2(t)$')
     a0.fill_between(t, P2 - P2_SE, P2 + P2_SE, color='C0', alpha=0.3, lw=0)
     a0.set_xlabel('time (a.u.)'); a0.set_ylabel(r'$P_2(t)$')

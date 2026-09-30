@@ -17,12 +17,12 @@ config_method.py, so the friction constant is written down exactly once.
 
 CONFIG = {
     # ----------------------------------------------------------------- orchestration (workflow)
-    'n_traj'    : 100000,      # number of independent trajectories to run
+    'n_traj'    : 1000000,      # number of independent trajectories to run
     'base_seed' : None,        # int -> reproducible; None -> fresh OS entropy each trajectory
     'ncores'    : 1,           # local cores for `python -m workflow.runner`
 
     'slurm': {
-        'max_tasks'     : 500,
+        'max_tasks'     : 499,
         'job_name'      : 'rpmash_grid',
         'time'          : '24:00:00',
         'cpus_per_task' : 1,
@@ -52,7 +52,5 @@ CONFIG = {
 
     # ----------------------------------------------------------------- integrator / thermostat
     'intype'    : 'spin_magnus_adaptive',
-    'Tjump'     : 1.0,
-    'full_jump' : False,
     'gamma'     : 2.00,           # friction constant; config_method.py feeds this into langevin_params
 }

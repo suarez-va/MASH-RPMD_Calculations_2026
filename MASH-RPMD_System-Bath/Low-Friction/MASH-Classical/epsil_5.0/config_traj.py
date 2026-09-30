@@ -32,4 +32,7 @@ CONFIG.update({
     'system_file': '../../../traj.py',
 
     'epsil' : 5.00,
+
+    'Tjump'     : 15.0,
+    'full_jump' : True,
 })

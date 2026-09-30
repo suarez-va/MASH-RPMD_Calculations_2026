@@ -42,7 +42,7 @@ CONFIG.update({
 
     # ------------------------------------------------------------------ part 2: production
     'traj_time' : 15.0,            # a.u.; Nsteps = traj_time / delt
-    'Nprint'    : 25,
+    'Nprint'    : 100,
 
     # ------------------------------------------------------------------ thermostat
     'langevin' : 'generalized',
