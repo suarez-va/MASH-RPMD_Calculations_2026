@@ -2,24 +2,24 @@
 traj.py -- Part 2 only: production, restarted from the shared thermalization bank.
 
 The equilibration that used to run inline here now lives in therm.py and is executed ONCE per tree
-into <tree>/thermalize/, producing therm<idx>.hdf per trajectory.  Part 1 does not depend on
-`epsil`, so trajectory k of EVERY epsil_* directory in a tree restarts from the same
-thermalize/therm<k>.hdf.
+into <tree>/therm/, producing therm/traj_<idx:07d>/data.hdf per trajectory.  Part 1 does not
+depend on `epsil`, so trajectory k of EVERY epsil_* directory in a tree restarts from the same
+therm/traj_<k:07d>/data.hdf.
 
 This driver therefore:
   1. recovers its trajectory index from the cwd (workflow.worker chdirs into traj_grid/traj<idx>/
      and calls run_trajectory(cfg, seed) without passing the index),
-  2. loads <tree>/thermalize/therm<idx>.hdf and validates it against this run's config,
+  2. loads <tree>/therm/traj_<idx:07d>/data.hdf and validates it against this run's config,
   3. continues the SAME trajectory with the REAL parameters (epsil, delta).
 
 Because memP and the (already cyclically rolled) noise trajectory Ffluci are carried across,
 production starts exactly as if the NVT had been run and the coupling then switched on -- verified
 bit-exact against the old single-process two-part driver.
 
-The restart is fail-fast: a missing or mismatched therm<idx>.hdf raises instead of silently
+The restart is fail-fast: a missing or mismatched traj_<idx:07d>/data.hdf raises instead of silently
 re-equilibrating.  Run the thermalize stage first:
 
-    cd <tree>/thermalize && python -m workflow.runner --config config_therm.py
+    cd <tree>/therm && python -m workflow.runner --config config_therm.py
     cd <tree>/epsil_0.00 && python -m workflow.runner --config config_traj.py
 
 `therm_dir` (default '../therm') is resolved relative to the epsil run directory.
@@ -65,7 +65,7 @@ def _load_therm(path, cfg):
         raise FileNotFoundError(
             f'thermalization file not found: {path}\n'
             f'Run the thermalize stage for this tree first '
-            f'(cd <tree>/thermalize && python -m workflow.runner --config config_therm.py).')
+            f'(cd <tree>/therm && python -m workflow.runner --config config_therm.py).')
 
     delt = float(cfg['delt']); lp = cfg['langevin_params']
     Nmem  = int(math.ceil(float(lp['Tmem']) / delt))
@@ -114,10 +114,10 @@ def run_trajectory(cfg, seed):
     # cwd is <epsil run dir>/traj_grid/traj<idx>  ->  the run dir is two levels up
     run_dir   = os.path.abspath(os.path.join(os.getcwd(), os.pardir, os.pardir))
     therm_dir = os.path.abspath(os.path.join(run_dir, cfg.get('therm_dir', '../therm')))
-    path      = os.path.join(therm_dir, f'therm_{idx:07d}.hdf')
+    path      = os.path.join(therm_dir, f'traj_{idx:07d}', 'data.hdf')
     #SCRATCH_DIR = '/storage/home/hcoda1/8/vsuarez6/scratch/'
     #SCRATCH_DIR = '/storage/scratch1/8/vsuarez6/'
-    #path      = os.path.join(SCRATCH_DIR, f'therm/therm_{idx:07d}.hdf')
+    #path      = os.path.join(SCRATCH_DIR, 'therm', f'traj_{idx:07d}', 'data.hdf')
 
     nucR, nucP, memP, Ffluci = _load_therm(path, cfg)
     print(f'[traj] traj {idx} restarting from {path}', flush=True)

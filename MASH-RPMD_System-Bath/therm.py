@@ -5,14 +5,15 @@ Analytically sample (R,P) from the NVT distribution, then run the GLE with the M
 parameters (therm_epsil, therm_delta) for therm_time.  This fills the memory buffer memP with a
 valid history and lets (R,P) relax.  The resulting restart state is written to
 
-    <thermalize run dir>/therm<idx>.hdf
+    therm/traj_<idx:07d>/data.hdf
 
-and NOTHING else is kept -- the per-trajectory scratch (.dat files, memK.dat) is deleted.
+(one directory per trajectory, so the shared therm/ dir is not hammered with file creates on large
+runs) and NOTHING else is kept -- the per-trajectory scratch (.dat files, memK.dat) is deleted.
 
 Why this is a separate stage: Part 1 does not depend on `epsil` at all (it runs with therm_epsil /
 therm_delta), and within one tree the epsil_* configs differ ONLY in `epsil`.  So one bank of
 thermalized states can seed the production run of every epsil_* directory: trajectory k in every
-epsil_* dir restarts from therm<k>.hdf.  Previously each of those 9 x n_traj trajectories redid its
+epsil_* dir restarts from therm/traj_<k:07d>/data.hdf.  Previously each of those 9 x n_traj trajectories redid its
 own identical 25000-step burn-in.
 
 The trajectory index is recovered from the working directory, because workflow.worker chdirs into
@@ -48,11 +49,11 @@ def traj_index(cwd=None):
 
 def therm_path(therm_dir, idx):
     """The canonical restart-file path for trajectory `idx`."""
-    #return os.path.join(therm_dir, f'therm_{idx:07d}.hdf')
+    #return os.path.join(therm_dir, f'traj_{idx:07d}', 'data.hdf')
     #SCRATCH_DIR = '/storage/home/hcoda1/8/vsuarez6/scratch/'
     #SCRATCH_DIR = '/storage/scratch1/8/vsuarez6/'
     SCRATCH_DIR = '/storage/home/hcoda1/8/vsuarez6/r-jkretchmer3-0/repos/MASH-RPMD_Calculations_2026/MASH-RPMD_System-Bath/Low-Friction/MASH-Classical/'
-    return os.path.join(SCRATCH_DIR, f'therm/therm_{idx:07d}.hdf')
+    return os.path.join(SCRATCH_DIR, 'therm', f'traj_{idx:07d}', 'data.hdf')
 
 
 def buffer_sizes(cfg):
@@ -94,6 +95,8 @@ def _write_therm(path, m1, Ffluci, cfg, seed, idx, Nburn):
     """Write the restart record atomically (tmp + os.replace) so a killed task leaves no half file."""
     Nmem, Nfluc, period = buffer_sizes(cfg)
     lp = cfg['langevin_params']
+    # one dir per trajectory: keeps the tmp-create/rename churn out of the shared therm/ dir
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + '.tmp'
     with h5py.File(tmp, 'w') as f:
         f.create_dataset('nucR',   data=np.ascontiguousarray(m1.nucR,        dtype=np.float64))
