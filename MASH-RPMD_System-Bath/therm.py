@@ -3,21 +3,34 @@ therm.py -- Part 1 only: the shared GLE thermalization stage.
 
 Analytically sample (R,P) from the NVT distribution, then run the GLE with the MODIFIED model
 parameters (therm_epsil, therm_delta) for therm_time.  This fills the memory buffer memP with a
-valid history and lets (R,P) relax.  The resulting restart state is written to
+valid history and lets (R,P) relax.  The resulting restart state is APPENDED as one row to a shard
 
-    therm/traj_<idx:07d>/data.hdf
+    <therm_dir>/shard_<SLURM_ARRAY_TASK_ID:04d>.hdf     (under SLURM: one shard per array task)
+    <therm_dir>/shard_traj<idx:07d>.hdf                 (locally: one shard per trajectory)
 
-(one directory per trajectory, so the shared therm/ dir is not hammered with file creates on large
-runs) and NOTHING else is kept -- the per-trajectory scratch (.dat files, memK.dat) is deleted.
+and NOTHING else is kept -- the per-trajectory scratch (.dat files, memK.dat) is deleted.  A SLURM
+array task runs its chunk of ~n_traj/495 trajectories sequentially in one process, so each shard has
+exactly one writer and the shared therm dir sees ~495 files instead of n_traj.  After the stage
+finishes, merge the shards into the single file traj.py reads:
+
+    python consolidate_therm.py --dir <therm_dir>          # -> <therm_dir>/therm_data.hdf
+
+Shard layout: per-trajectory datasets nucR, nucP, memP, Ffluci, seed, idx, all growing along axis 0
+(one trajectory per chunk); the run-constant metadata lives in the root attrs.  `idx` is resized and
+written LAST, so len(idx) is the committed row count -- a row past it is a write cut off by a kill,
+which the next append overwrites and consolidation ignores.  A trajectory already committed to its
+shard is skipped, so resubmitting the same submit_grid.sh after a timeout resumes each task.
 
 Why this is a separate stage: Part 1 does not depend on `epsil` at all (it runs with therm_epsil /
 therm_delta), and within one tree the epsil_* configs differ ONLY in `epsil`.  So one bank of
 thermalized states can seed the production run of every epsil_* directory: trajectory k in every
-epsil_* dir restarts from therm/traj_<k:07d>/data.hdf.  Previously each of those 9 x n_traj trajectories redid its
-own identical 25000-step burn-in.
+epsil_* dir restarts from row k of therm_data.hdf.  Previously each of those 9 x n_traj trajectories
+redid its own identical 25000-step burn-in.
 
 The trajectory index is recovered from the working directory, because workflow.worker chdirs into
 traj_grid/traj<idx>/ and calls run_trajectory(cfg, seed) WITHOUT passing the index.
+
+`therm_dir` (cfg key) overrides where the shards go; the default is the hardcoded scratch path below.
 
 Usage (from the thermalize run dir, PYTHONPATH=<RP_MASH root>):
     python -m workflow.runner --config config_therm.py
@@ -47,13 +60,26 @@ def traj_index(cwd=None):
     return int(base[4:])
 
 
-def therm_path(therm_dir, idx):
-    """The canonical restart-file path for trajectory `idx`."""
-    #return os.path.join(therm_dir, f'traj_{idx:07d}', 'data.hdf')
-    #SCRATCH_DIR = '/storage/home/hcoda1/8/vsuarez6/scratch/'
-    #SCRATCH_DIR = '/storage/scratch1/8/vsuarez6/'
-    SCRATCH_DIR = '/storage/home/hcoda1/8/vsuarez6/r-jkretchmer3-0/repos/MASH-RPMD_Calculations_2026/MASH-RPMD_System-Bath/Low-Friction/MASH-Classical/'
-    return os.path.join(SCRATCH_DIR, 'therm', f'traj_{idx:07d}', 'data.hdf')
+#SCRATCH_DIR = '/storage/home/hcoda1/8/vsuarez6/scratch/'
+#SCRATCH_DIR = '/storage/scratch1/8/vsuarez6/'
+SCRATCH_DIR = '/storage/home/hcoda1/8/vsuarez6/r-jkretchmer3-0/repos/MASH-RPMD_Calculations_2026/MASH-RPMD_System-Bath/Low-Friction/MASH-Classical/'
+
+
+def therm_dir(cfg):
+    """Where the shards go: cfg['therm_dir'] if given, else <SCRATCH_DIR>/therm."""
+    return os.path.abspath(cfg.get('therm_dir', os.path.join(SCRATCH_DIR, 'therm')))
+
+
+def shard_path(therm_dir, idx):
+    """
+    The shard trajectory `idx` is appended to.  Under SLURM it is the array task's shard (the task
+    runs its chunk sequentially, so one writer per file); locally workflow.runner runs every
+    trajectory as its own concurrent process, so each gets its own shard instead.
+    """
+    task = os.environ.get('SLURM_ARRAY_TASK_ID')
+    if task is not None:
+        return os.path.join(therm_dir, f'shard_{int(task):04d}.hdf')
+    return os.path.join(therm_dir, f'shard_traj{idx:07d}.hdf')
 
 
 def buffer_sizes(cfg):
@@ -91,37 +117,76 @@ def _build(cfg, potparams, nucR, nucP, seed, **restart):
         langevin=cfg['langevin'], langevin_params=cfg['langevin_params'], seed=seed, **restart)
 
 
-def _write_therm(path, m1, Ffluci, cfg, seed, idx, Nburn):
-    """Write the restart record atomically (tmp + os.replace) so a killed task leaves no half file."""
+def _run_attrs(cfg, Nburn):
+    """The run-constant metadata stored in a shard's root attrs (identical for every row)."""
     Nmem, Nfluc, period = buffer_sizes(cfg)
     lp = cfg['langevin_params']
-    # one dir per trajectory: keeps the tmp-create/rename churn out of the shared therm/ dir
+    return {
+        'nbds'         : int(cfg['nbds']),   'nnuc' : int(cfg['nnuc']),
+        'delt'         : float(cfg['delt']), 'beta' : float(cfg['beta']),
+        'gamma'        : float(lp['gamma']),
+        'Tmem'         : float(lp['Tmem']),  'Tfluc': float(lp['Tfluc']),
+        'Nmem'         : int(Nmem),          'Nfluc': int(Nfluc),
+        'period'       : int(period),
+        'Nburn'        : int(Nburn),
+        'noise_offset' : int(Nburn % period),
+        'therm_time'   : float(cfg['therm_time']),
+        'therm_epsil'  : float(cfg['therm_epsil']),
+        'therm_delta'  : float(cfg['therm_delta']),
+        'kvec'         : float(cfg['kvec']), 'lbd'  : float(cfg['lbd']),
+        'intype'       : str(cfg['intype']),
+        'langevin'     : str(cfg['langevin']),
+        'centroid_bool': True,
+    }
+
+
+def already_done(path, idx):
+    """True if trajectory `idx` is committed to the shard at `path` (resume after a killed task)."""
+    if not os.path.isfile(path):
+        return False
+    with h5py.File(path, 'r') as f:
+        return 'idx' in f and bool(np.any(f['idx'][:] == idx))
+
+
+def _write_therm(path, m1, Ffluci, cfg, seed, idx, Nburn):
+    """
+    Append trajectory `idx` as one row of the shard at `path`.  The data rows are written first and
+    `idx` LAST, so len(idx) only counts rows that were fully written.  The shard is opened and closed
+    per trajectory (not held open across the chunk) so a kill mid-chunk can at worst cut off the row
+    being written, not leave the whole file unflushed.
+    """
+    rows = {
+        'nucR'  : np.ascontiguousarray(m1.nucR,       dtype=np.float64),
+        'nucP'  : np.ascontiguousarray(m1.nucP,       dtype=np.float64),
+        'memP'  : np.ascontiguousarray(m1.integ.memP, dtype=np.float64),
+        'Ffluci': np.ascontiguousarray(Ffluci,        dtype=np.float64),
+        'seed'  : np.int64(-1 if seed is None else int(seed)),
+    }
+    attrs = _run_attrs(cfg, Nburn)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + '.tmp'
-    with h5py.File(tmp, 'w') as f:
-        f.create_dataset('nucR',   data=np.ascontiguousarray(m1.nucR,        dtype=np.float64))
-        f.create_dataset('nucP',   data=np.ascontiguousarray(m1.nucP,        dtype=np.float64))
-        f.create_dataset('memP',   data=np.ascontiguousarray(m1.integ.memP,  dtype=np.float64))
-        f.create_dataset('Ffluci', data=np.ascontiguousarray(Ffluci,         dtype=np.float64))
-        a = f.attrs
-        a['seed']         = -1 if seed is None else int(seed)
-        a['idx']          = int(idx)
-        a['nbds']         = int(cfg['nbds']);   a['nnuc'] = int(cfg['nnuc'])
-        a['delt']         = float(cfg['delt']); a['beta'] = float(cfg['beta'])
-        a['gamma']        = float(lp['gamma'])
-        a['Tmem']         = float(lp['Tmem']);  a['Tfluc'] = float(lp['Tfluc'])
-        a['Nmem']         = int(Nmem);          a['Nfluc'] = int(Nfluc)
-        a['period']       = int(period)
-        a['Nburn']        = int(Nburn)
-        a['noise_offset'] = int(Nburn % period)
-        a['therm_time']   = float(cfg['therm_time'])
-        a['therm_epsil']  = float(cfg['therm_epsil'])
-        a['therm_delta']  = float(cfg['therm_delta'])
-        a['kvec']         = float(cfg['kvec']); a['lbd'] = float(cfg['lbd'])
-        a['intype']       = str(cfg['intype'])
-        a['langevin']     = str(cfg['langevin'])
-        a['centroid_bool'] = True
-    os.replace(tmp, path)
+    with h5py.File(path, 'a') as f:
+        if 'idx' not in f:
+            f.attrs.update(attrs)
+            for name, arr in rows.items():
+                if name not in f:      # a kill between dataset creations can leave some behind
+                    sh = np.shape(arr)
+                    f.create_dataset(name, shape=(0,) + sh, maxshape=(None,) + sh,
+                                     chunks=(1,) + sh if sh else (4096,), dtype=arr.dtype)
+            f.create_dataset('idx', shape=(0,), maxshape=(None,), chunks=(4096,), dtype='i8')
+        else:
+            for key, want in attrs.items():
+                if f.attrs.get(key) != want:
+                    raise ValueError(f'{path}: {key}={f.attrs.get(key)!r} but this run uses '
+                                     f'{want!r}; this shard came from a different config.')
+        n = f['idx'].shape[0]
+        for name, arr in rows.items():
+            d = f[name]
+            if d.shape[0] < n + 1:
+                d.resize(n + 1, axis=0)
+            d[n] = arr
+        f.flush()
+        f['idx'].resize(n + 1, axis=0)
+        f['idx'][n] = int(idx)
 
 
 def run_trajectory(cfg, seed):
@@ -129,9 +194,10 @@ def run_trajectory(cfg, seed):
     nbds = cfg['nbds']; delt = cfg['delt']
     kvec, lbd = cfg['kvec'], cfg['lbd']; bath = np.asarray(cfg['bath'], float)
 
-    # cwd is <thermalize run dir>/traj_grid/traj<idx>  ->  the run dir is two levels up
-    run_dir = os.path.abspath(os.path.join(os.getcwd(), os.pardir, os.pardir))
-    out     = therm_path(run_dir, idx)
+    out = shard_path(therm_dir(cfg), idx)
+    if already_done(out, idx):
+        print(f'[therm] traj {idx} already in {out}; skipping', flush=True)
+        return
 
     rng = np.random.default_rng(seed)
     nucR, nucP = _sample_nvt(cfg, rng)
@@ -151,7 +217,7 @@ def run_trajectory(cfg, seed):
     _write_therm(out, m1, Ffluci, cfg, seed, idx, Nburn)
     print(f'[therm] traj {idx} -> {out}', flush=True)
 
-    # This stage keeps ONLY the .hdf; drop the per-trajectory scratch (memK.dat alone is ~4 MB).
+    # This stage keeps ONLY the shard row; drop the per-trajectory scratch (memK.dat alone is ~4 MB).
     for _f in _SCRATCH:
         if os.path.exists(_f):
             os.remove(_f)
