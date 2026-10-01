@@ -1,6 +1,7 @@
 __pycache__/
-traj_grid/
-therm_grid/
+traj_grid*/
+therm_grid*/
+therm_*/
 *.hdf
 *.tmp
 *.dat

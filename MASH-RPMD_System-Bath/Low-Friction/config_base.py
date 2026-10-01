@@ -17,12 +17,12 @@ config_method.py, so the friction constant is written down exactly once.
 
 CONFIG = {
     # ----------------------------------------------------------------- orchestration (workflow)
-    'n_traj'    : 1000000,      # number of independent trajectories to run
+    'n_traj'    : 10000000,      # number of independent trajectories to run
     'base_seed' : None,        # int -> reproducible; None -> fresh OS entropy each trajectory
     'ncores'    : 1,           # local cores for `python -m workflow.runner`
 
     'slurm': {
-        'max_tasks'     : 499,
+        'max_tasks'     : 495,
         'job_name'      : 'rpmash_grid',
         'time'          : '24:00:00',
         'cpus_per_task' : 1,

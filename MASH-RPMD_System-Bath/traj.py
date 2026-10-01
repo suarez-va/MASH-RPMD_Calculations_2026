@@ -114,10 +114,10 @@ def run_trajectory(cfg, seed):
     # cwd is <epsil run dir>/traj_grid/traj<idx>  ->  the run dir is two levels up
     run_dir   = os.path.abspath(os.path.join(os.getcwd(), os.pardir, os.pardir))
     therm_dir = os.path.abspath(os.path.join(run_dir, cfg.get('therm_dir', '../therm')))
-    path      = os.path.join(therm_dir, f'therm_{idx:06d}.hdf')
+    path      = os.path.join(therm_dir, f'therm_{idx:07d}.hdf')
     #SCRATCH_DIR = '/storage/home/hcoda1/8/vsuarez6/scratch/'
     #SCRATCH_DIR = '/storage/scratch1/8/vsuarez6/'
-    #path      = os.path.join(SCRATCH_DIR, f'therm/therm_{idx:06d}.hdf')
+    #path      = os.path.join(SCRATCH_DIR, f'therm/therm_{idx:07d}.hdf')
 
     nucR, nucP, memP, Ffluci = _load_therm(path, cfg)
     print(f'[traj] traj {idx} restarting from {path}', flush=True)

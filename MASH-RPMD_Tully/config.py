@@ -23,14 +23,14 @@ Every other value is carried over from the System-Bath config unchanged.
 
 CONFIG = {
     # ----------------------------------------------------------------- orchestration (workflow)
-    'n_traj'    : 100,     # number of independent trajectories to run
+    'n_traj'    : 2000000,     # number of independent trajectories to run
     'base_seed' : None,        # int -> reproducible; None -> fresh OS entropy each trajectory
-    'ncores'    : 12,           # local cores for `python -m workflow.runner`
+    'ncores'    : 1,           # local cores for `python -m workflow.runner`
 
     'slurm': {
-        'max_tasks'     : 499,
+        'max_tasks'     : 495,
         'job_name'      : 'rpmash_grid',
-        'time'          : '24:00:00',
+        'time'          : '29:59:00',
         'cpus_per_task' : 1,
         'max_concurrent': None,
         'partition'     : None,
@@ -68,14 +68,14 @@ CONFIG = {
 
     # ----------------------------------------------------------------- ring polymer / integrator
     'nbds'  : 1,               # classical limit: a single bead
-    'delt'  : 0.1,
+    'delt'  : 5.0,
     'intype': 'spin_magnus_adaptive',
 
     # ----------------------------------------------------------------- production
     'traj_time' : 4200.0,        # a.u.; Nsteps = traj_time / delt
-    'Nprint'    : 100,
+    'Nprint'    : 5,
 
     # ----------------------------------------------------------------- quantum jumps
-    'Tjump'     : 1000000.0,
+    'Tjump'     : 2100.0,
     'full_jump' : True,
 }

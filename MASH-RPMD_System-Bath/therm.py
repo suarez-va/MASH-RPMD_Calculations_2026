@@ -48,10 +48,11 @@ def traj_index(cwd=None):
 
 def therm_path(therm_dir, idx):
     """The canonical restart-file path for trajectory `idx`."""
-    return os.path.join(therm_dir, f'therm_{idx:06d}.hdf')
+    #return os.path.join(therm_dir, f'therm_{idx:07d}.hdf')
     #SCRATCH_DIR = '/storage/home/hcoda1/8/vsuarez6/scratch/'
     #SCRATCH_DIR = '/storage/scratch1/8/vsuarez6/'
-    #return os.path.join(SCRATCH_DIR, f'therm/therm_{idx:06d}.hdf')
+    SCRATCH_DIR = '/storage/home/hcoda1/8/vsuarez6/r-jkretchmer3-0/repos/MASH-RPMD_Calculations_2026/MASH-RPMD_System-Bath/Low-Friction/MASH-Classical/'
+    return os.path.join(SCRATCH_DIR, f'therm/therm_{idx:07d}.hdf')
 
 
 def buffer_sizes(cfg):

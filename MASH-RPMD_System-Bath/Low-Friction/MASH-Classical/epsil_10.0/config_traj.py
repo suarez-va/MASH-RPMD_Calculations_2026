@@ -33,6 +33,6 @@ CONFIG.update({
 
     'epsil' : 10.00,
 
-    'Tjump'     : 20.0,
+    'Tjump'     : 15.0,
     'full_jump' : True,
 })
