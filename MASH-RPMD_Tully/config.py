@@ -28,14 +28,14 @@ data.hdf for the analysis scripts:
 
 CONFIG = {
     # ----------------------------------------------------------------- orchestration (workflow)
-    'n_traj'    : 2000000,     # number of independent trajectories to run
+    'n_traj'    : 100000,     # number of independent trajectories to run
     'base_seed' : None,        # int -> reproducible; None -> fresh OS entropy each trajectory
     'ncores'    : 1,           # local cores for `python -m workflow.runner`
     'shard_size': 1000,        # trajectories per shards/shard_<s>.hdf (None -> one dir per trajectory)
     'shard_dir' : 'shards',    # relative to this dir; merge with `python -m workflow.shards`
 
     'slurm': {
-        'max_tasks'     : 495,
+        'max_tasks'     : 50,
         'job_name'      : 'rpmash_grid',
         'time'          : '29:59:00',
         'cpus_per_task' : 1,
@@ -83,6 +83,6 @@ CONFIG = {
     'Nprint'    : 5,
 
     # ----------------------------------------------------------------- quantum jumps
-    'Tjump'     : 2100.0,
+    'Tjump'     : 1000000.0,
     'full_jump' : True,
 }
