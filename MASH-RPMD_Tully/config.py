@@ -16,9 +16,14 @@ Relative to Low-Friction/MASH-Classical/epsil_10.0 the differences are:
 
 Every other value is carried over from the System-Bath config unchanged.
 
-    python -m workflow.runner      --config config.py                     # local
-    python -m workflow.slurm       --config config.py && sbatch submit_grid.sh
-    python -m workflow.consolidate --config config.py --workers 4 [--quick-start]
+Output is saved in shards (workflow.shards): trajectory idx is a row of shards/shard_<s>.hdf with
+s = idx // shard_size.  With n_traj=2M and shard_size=1000 that is 2000 shards (shard_0000 ..
+shard_1999), run by 400 SLURM tasks x 5 shards each.  Merge them into one consolidate-style
+data.hdf for the analysis scripts:
+
+    python -m workflow.runner  --config config.py                     # local
+    python -m workflow.slurm   --config config.py && sbatch submit_grid.sh
+    python -m workflow.shards  --config config.py                     # merge shards -> data.hdf
 """
 
 CONFIG = {
@@ -26,6 +31,8 @@ CONFIG = {
     'n_traj'    : 2000000,     # number of independent trajectories to run
     'base_seed' : None,        # int -> reproducible; None -> fresh OS entropy each trajectory
     'ncores'    : 1,           # local cores for `python -m workflow.runner`
+    'shard_size': 1000,        # trajectories per shards/shard_<s>.hdf (None -> one dir per trajectory)
+    'shard_dir' : 'shards',    # relative to this dir; merge with `python -m workflow.shards`
 
     'slurm': {
         'max_tasks'     : 495,
