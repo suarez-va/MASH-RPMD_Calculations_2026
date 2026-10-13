@@ -20,6 +20,8 @@ CONFIG = {
     'n_traj'    : 10000000,      # number of independent trajectories to run
     'base_seed' : None,        # int -> reproducible; None -> fresh OS entropy each trajectory
     'ncores'    : 1,           # local cores for `python -m workflow.runner`
+    'shard_size': 1000,        # trajectories per shards/shard_<s>.hdf (None -> one dir per trajectory)
+    'shard_dir' : 'shards',    # relative to the run dir; merge with `python -m workflow.shards`
 
     'slurm': {
         'max_tasks'     : 495,

@@ -1,33 +1,35 @@
 """
 traj.py -- Part 2 only: production, restarted from the shared thermalization bank.
 
-The equilibration that used to run inline here now lives in therm.py and is executed ONCE per tree
-into per-task shards, which consolidate_therm.py then merges into ONE file, <therm_dir>/therm_data.hdf,
-holding every trajectory's restart state as row idx.  Part 1 does not depend on `epsil`, so
-trajectory k of EVERY epsil_* directory in a tree restarts from the same row k.
+The equilibration that used to run inline here now lives in therm.py and is executed ONCE per tree.
+Its restart states live in workflow.shards files <therm_dir>/shard_<s>.hdf, one row per trajectory.
+Part 1 does not depend on `epsil`, so trajectory k of EVERY epsil_* directory in a tree restarts
+from the same therm row.  There is no consolidation step: this driver opens the therm shard holding
+its trajectory and reads that row directly.
 
 This driver therefore:
-  1. recovers its trajectory index from the cwd (workflow.worker chdirs into traj_grid/traj<idx>/
-     and calls run_trajectory(cfg, seed) without passing the index),
-  2. reads row idx of therm_data.hdf and validates it against this run's config,
+  1. takes its trajectory index and run dir from workflow.shards (or, in the old one-dir-per-
+     trajectory mode, recovers them from the cwd traj_grid/traj<idx>/),
+  2. finds the therm shard s = idx // shard_size (shard_size read from the therm shards' own attrs,
+     so it need not match the production shard_size), looks idx up in that shard's traj_index, reads
+     the row and validates it against this run's config,
   3. continues the SAME trajectory with the REAL parameters (epsil, delta).
 
-therm_data.hdf is opened once per process and kept open (read-only), since a SLURM array task runs
-its whole chunk of trajectories through run_trajectory in one process.
+The therm dir is listed once per process and one therm shard is kept open (read-only) at a time; a
+task's trajectories run in index order, so it switches shard only when idx crosses into the next.
 
 Because memP and the (already cyclically rolled) noise trajectory Ffluci are carried across,
 production starts exactly as if the NVT had been run and the coupling then switched on -- verified
 bit-exact against the old single-process two-part driver.
 
-The restart is fail-fast: a missing file, a trajectory absent from it, or a mismatched record
-raises instead of silently re-equilibrating.  Run the thermalize stage and consolidate first:
+The restart is fail-fast: a missing shard, a trajectory absent from it, or a mismatched record
+raises instead of silently re-equilibrating.  Run the thermalize stage first:
 
     cd <tree>/therm && python -m workflow.runner --config config_therm.py
-    python consolidate_therm.py --dir <therm_dir>
     cd <tree>/epsil_0.00 && python -m workflow.runner --config config_traj.py
 
-`therm_dir` (default '../therm') is resolved relative to the epsil run directory; `therm_file`
-(default 'therm_data.hdf') is the file inside it.
+`therm_dir` (default '../therm_shards') is resolved relative to the epsil run directory and must be
+the therm stage's shard_dir.
 """
 
 import os
@@ -58,45 +60,72 @@ def _build(cfg, potparams, nucR, nucP, seed, **restart):
         Tjump=cfg['Tjump'], full_jump=cfg['full_jump'], seed=seed, **restart)
 
 
-_THERM_FILES = {}   # path -> open read-only h5py.File, reused across a task's whole chunk
+# the thermalization bank, cached per process: shard number -> path (listed once), the bank's
+# shard_size, and the ONE therm shard currently open as (s, path, h5py.File, {idx: row})
+_BANK = {'dir': None, 'paths': None, 'size': None, 'cur': None}
+
+_RUN_THERM = ('Run the thermalize stage for this tree first '
+              '(cd <tree>/therm && python -m workflow.runner --config config_therm.py).')
 
 
-def _open_therm(path):
-    f = _THERM_FILES.get(path)
-    if f is None:
-        if not os.path.isfile(path):
-            raise FileNotFoundError(
-                f'thermalization file not found: {path}\n'
-                f'Run the thermalize stage for this tree and merge its shards first '
-                f'(cd <tree>/therm && python -m workflow.runner --config config_therm.py; '
-                f'python consolidate_therm.py --dir <therm_dir>).')
-        f = _THERM_FILES[path] = h5py.File(path, 'r')
-    return f
+def _therm_shard(therm_dir, idx):
+    """(path, open file, row of idx) for the therm shard holding trajectory idx."""
+    if _BANK['dir'] != therm_dir:
+        paths = {}
+        for name in (os.listdir(therm_dir) if os.path.isdir(therm_dir) else ()):
+            stem = name[len('shard_'):-len('.hdf')]
+            if name.startswith('shard_') and name.endswith('.hdf') and stem.isdigit():
+                paths[int(stem)] = os.path.join(therm_dir, name)
+        if not paths:
+            raise FileNotFoundError(f'no thermalization shards (shard_*.hdf) in {therm_dir}\n{_RUN_THERM}')
+        with h5py.File(next(iter(paths.values())), 'r') as f:
+            if 'shard_size' not in f.attrs or 'traj_index' not in f:
+                raise ValueError(f'{f.filename} is not a workflow.shards thermalization shard (an old '
+                                 f'format bank?).\n{_RUN_THERM}')
+            size = int(f.attrs['shard_size'])
+        if _BANK['cur'] is not None:
+            _BANK['cur'][2].close()
+        _BANK.update(dir=therm_dir, paths=paths, size=size, cur=None)
+
+    s = idx // _BANK['size']
+    cur = _BANK['cur']
+    if cur is None or cur[0] != s:
+        if cur is not None:
+            cur[2].close()
+            _BANK['cur'] = None
+        path = _BANK['paths'].get(s)
+        if path is None:
+            raise FileNotFoundError(f'no thermalization shard {s} (trajectory {idx}) in {therm_dir}\n'
+                                    f'{_RUN_THERM}')
+        f = h5py.File(path, 'r')
+        rows = {int(k): r for r, k in enumerate(f['traj_index'][:])}
+        cur = _BANK['cur'] = (s, path, f, rows)
+    s, path, f, rows = cur
+    if idx not in rows:
+        raise LookupError(f'{path}: trajectory {idx} is not in this thermalization shard '
+                          f'({len(rows)} committed). Its therm run failed or did not finish; '
+                          f'resubmit the therm stage.')
+    return path, f, rows[idx]
 
 
-def _load_therm(path, idx, cfg):
+def _load_therm(therm_dir, idx, cfg):
     """
-    Load and validate trajectory idx's thermalization record from the consolidated file.  Returns
-    (nucR, nucP, memP, Ffluci), all float64 and C-contiguous.
+    Load and validate trajectory idx's thermalization record from its therm shard.  Returns
+    (path, row, nucR, nucP, memP, Ffluci), the arrays float64 and C-contiguous.
 
     Validation matters here: integrator.__init__ only compares array SHAPES, with a bare exit() and
     no traceback on mismatch, and it would not notice a float32 or non-contiguous array at all.
     """
-    f = _open_therm(path)
-    n = f['present'].shape[0]
-    if idx >= n or not f['present'][idx]:
-        raise LookupError(f'{path}: trajectory {idx} is not in the thermalization bank '
-                          f'({f.attrs.get("n_present")} of {n} present). Its therm run failed or '
-                          f'its shard was missing at consolidation.')
+    path, f, row = _therm_shard(therm_dir, idx)
 
     delt = float(cfg['delt']); lp = cfg['langevin_params']
     Nmem  = int(math.ceil(float(lp['Tmem']) / delt))
     Nfluc = int(float(lp['Tfluc']) / (2 * delt))
 
-    nucR   = np.ascontiguousarray(f['nucR'][idx],   dtype=np.float64)
-    nucP   = np.ascontiguousarray(f['nucP'][idx],   dtype=np.float64)
-    memP   = np.ascontiguousarray(f['memP'][idx],   dtype=np.float64)
-    Ffluci = np.ascontiguousarray(f['Ffluci'][idx], dtype=np.float64)
+    nucR   = np.ascontiguousarray(f['nucR'][row],   dtype=np.float64)
+    nucP   = np.ascontiguousarray(f['nucP'][row],   dtype=np.float64)
+    memP   = np.ascontiguousarray(f['memP'][row],   dtype=np.float64)
+    Ffluci = np.ascontiguousarray(f['Ffluci'][row], dtype=np.float64)
     a = dict(f.attrs)
 
     # the physics that must NOT differ between equilibration and production
@@ -125,23 +154,23 @@ def _load_therm(path, idx, cfg):
             raise ValueError(f'{path}: memP[:,{i},-1] does not match the normal-mode transform of '
                              f'nucP[:,{i}]; the restart state is inconsistent.')
 
-    return nucR, nucP, memP, Ffluci
+    return path, row, nucR, nucP, memP, Ffluci
 
 
-def run_trajectory(cfg, seed):
-    idx = traj_index()
+def run_trajectory(cfg, seed, idx=None, run_dir=None):
+    # Shard mode (workflow.shards) runs each trajectory in a temp dir off the run dir and passes idx
+    # and run_dir in.  Otherwise the cwd is <epsil run dir>/traj_grid/traj<idx>, and both come from it.
+    if idx is None:
+        idx = traj_index()
+    if run_dir is None:
+        run_dir = os.path.abspath(os.path.join(os.getcwd(), os.pardir, os.pardir))
     kvec, lbd = cfg['kvec'], cfg['lbd']; bath = np.asarray(cfg['bath'], float)
 
-    # cwd is <epsil run dir>/traj_grid/traj<idx>  ->  the run dir is two levels up
-    run_dir   = os.path.abspath(os.path.join(os.getcwd(), os.pardir, os.pardir))
-    therm_dir = os.path.abspath(os.path.join(run_dir, cfg.get('therm_dir', '../therm')))
-    path      = os.path.join(therm_dir, cfg.get('therm_file', 'therm_data.hdf'))
-    #SCRATCH_DIR = '/storage/home/hcoda1/8/vsuarez6/scratch/'
-    #SCRATCH_DIR = '/storage/scratch1/8/vsuarez6/'
-    #path      = os.path.join(SCRATCH_DIR, 'therm', 'therm_data.hdf')
+    # an absolute therm_dir (e.g. on scratch) is used as is
+    therm_dir = os.path.abspath(os.path.join(run_dir, cfg.get('therm_dir', '../therm_shards')))
 
-    nucR, nucP, memP, Ffluci = _load_therm(path, idx, cfg)
-    print(f'[traj] traj {idx} restarting from row {idx} of {path}', flush=True)
+    path, row, nucR, nucP, memP, Ffluci = _load_therm(therm_dir, idx, cfg)
+    print(f'[traj] traj {idx} restarting from row {row} of {path}', flush=True)
 
     # ---- production with the REAL params, continuing from the thermalized state ----
     pot_p = [kvec, cfg['epsil'], lbd, cfg['delta'], bath]
