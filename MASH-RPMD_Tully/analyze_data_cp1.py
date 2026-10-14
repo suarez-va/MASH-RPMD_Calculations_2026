@@ -19,19 +19,22 @@ bottom-right M_x, M_y.
 
 W_AB^(m)     the weights that are CONSTANT between jumps: workflow.expand_weights.
 W_AB^(m)(t)  the TIME-DEPENDENT weights: workflow.expand_weights_t.  These are never written per
-             time step.  At jump m, mash_rpmd freezes S^(m-1)(t_m) (the bead-mean spin right before
-             the resample) and W^(m-1)(t_m) (times jump m's sampling factor) into /weights; the
-             analysis then finishes the chain on the fly,
+             time step.  At jump m, mash_rpmd freezes into /weights the bead-mean spins right
+             before (S^(m-1)(t_m)) and right after (S^(m)(t_m)) the resample, and W^(m-1)(t_m) (times
+             jump m's sampling factor); the analysis then finishes the chain on the fly (A = P, C):
 
-                 m = 0:  W^(0)(t) = c0 (2|S_z(t)|, 2, 2, 3)
-                 m > 0:  W^(m)(t) = recursion( S(t), S^(m-1)(t_m), W^(m-1)(t_m) )
+                 m = 0:  W^(0)(t)    = c0 (2|S_z(t)|, 2, 2, 3)
+                 m > 0:  W_AC^(m)(t) = 3 dot_m W_AC^(m-1)(t_m) +            2 fac_m W_AP^(m-1)(t_m)
+                         W_AP^(m)(t) = 2 dot_m W_AC^(m-1)(t_m) + 2 |S_z(t)| fac_m W_AP^(m-1)(t_m)
 
-             with the same full_jump recursion mash_rpmd uses for the constant weights.  Only the M
+             with dot_m = S_x^(m-1)(t_m) S_x^(m)(t_m) + S_y^(m-1)(t_m) S_y^(m)(t_m) and
+             fac_m = 1 + sgn(S_z^(m-1)(t_m) S_z^(m)(t_m)) both fixed at the jump, so t enters only
+             through |S_z(t)| (W_PC(t), W_CC(t) are constant within a segment).  Only the M
              functions use them.  Since W^(0)(0) = W^(0), every M_a(0) is 0 -- up to ~1e-10, because
              W^(0)(0) is built from mapSz.dat and W^(0) from weights.dat, each rounded to 8 digits.
 
 Spins: h(+-S_z) is reduced over beads as np.heaviside(Sz, 0.5).mean(axis=beads) (analyze_cpm.py's
-convention); S_x, S_y and the S(t) inside expand_weights_t are bead means.  For nbds == 1 (what
+convention); S_x, S_y and the S_z(t) inside expand_weights_t are bead means.  For nbds == 1 (what
 this tree runs) every bead convention coincides.
 
 Exact identities, checked and reported on the console (h(x) + h(-x) = 1 bead by bead):
@@ -53,7 +56,8 @@ The trajectories are split into `nblocks` contiguous blocks (np.array_split) and
 standard deviation of the block means.  Only running totals and per-block sums are kept, so peak
 memory is O(nblocks*T + slab*T) at any n_traj.
 
-A jump run needs full_jump=True and the 13-column /weights table.
+A jump run needs full_jump=True and the 15-column /weights table (older 13-column runs used the
+superseded definition with dot and sgn taken at t, and are refused).
 
 --- no-jump runs (Tjump=None) ----------------------------------------------------------------------
 
@@ -146,9 +150,10 @@ def compute(path, nblocks=None, slab=5000, c0=None):
         cfg  = json.loads(f.attrs['config_json'])
         nbds = int(f.attrs['nbds'])
         jumps = 'weights' in f
-        if jumps and f['weights'].shape[2] < 13:
+        if jumps and f['weights'].shape[2] < 15:
             raise KeyError(f"{sources[0][0]} has a {f['weights'].shape[2]}-column /weights table, "
-                           f"expected 13. The run predates the time-dependent-weight inputs; re-run it.")
+                           f"expected 15. The run predates the corrected time-dependent weights; "
+                           f"re-run it.")
     if jumps and not cfg.get('full_jump', True):
         raise ValueError('the time-dependent weights are only defined for full_jump=True runs')
     if not jumps and c0 is None:
