@@ -55,7 +55,10 @@ on a sorted data.hdf.  So the shards and the merged file give the same result, e
 compute() is a map-reduce over the files (workflow.reduce): --ncores worker processes each open whole
 shards read-only and return their partial sums (_file_partial: totals plus the sums of the one or two
 error-bar blocks a shard touches), and the parent adds them up.  Run it as ONE multi-core job, not on
-a login node; the default --ncores is $SLURM_CPUS_PER_TASK, so inside a job it uses what it was given:
+a login node.  Without --ncores it uses the CPUs of the SLURM allocation it runs in:
+$SLURM_CPUS_PER_TASK if set (-c / --cpus-per-task), otherwise -- inside any SLURM job, e.g. -n N,
+--exclusive, or an interactive desktop -- the number of CPUs the job confines it to; outside SLURM, 1.
+The first line of output says how many workers it is using and why; --ncores N overrides it.
 
     #SBATCH --cpus-per-task=32
     #SBATCH --mem=32G                       # ~ ncores x slab x T x nbds x 8 B x ~10 arrays, see --slab
@@ -101,7 +104,7 @@ import numpy as np
 import h5py
 
 from workflow import expand_weights, expand_weights_t   # per-jump table -> dense W^(m), W^(m)(t)
-from workflow import shard_plan, block_ids, map_files   # parallel map-reduce over the files
+from workflow import shard_plan, block_ids, map_files, ncores_source   # parallel map-reduce
 
 
 _NAMES = ('Cp', 'Cm', 'Cx', 'Cy', 'Mp', 'Mm', 'Mx', 'My')
@@ -181,10 +184,25 @@ def _file_partial(path, brow, jumps, slab, time):
 def compute(path, nblocks=None, slab=5000, c0=None, ncores=None):
     """
     REDUCE step: run _file_partial over every file of `path` (a shard directory or a data.hdf) on
-    `ncores` worker processes (default: $SLURM_CPUS_PER_TASK, else 1) and combine the partials.
+    `ncores` worker processes and combine the partials. ncores=None detects the CPUs of the SLURM
+    allocation (workflow.ncores_source), else 1.
     """
     plan = shard_plan(path)                         # [(file, traj_index, rank_offset)]
     n_traj = sum(ti.size for _, ti, _ in plan)
+
+    # parallel setup, reported so a silent fall-back to one core cannot go unnoticed
+    if ncores is None:
+        ncores, why = ncores_source()
+    else:
+        why = 'given --ncores'
+    busy = min(ncores, len(plan))
+    print(f'[cm] {len(plan)} file(s), {n_traj} trajectories: {busy} worker process(es) '
+          f'({why})', flush=True)
+    if ncores == 1 and why == 'not inside a SLURM job':
+        print('[cm] NOTE: running on ONE core. Pass --ncores N to use N cores.', flush=True)
+    elif ncores > len(plan):
+        print(f'[cm] NOTE: only {len(plan)} file(s) for {ncores} cores; work is split per file, so '
+              f'at most {len(plan)} workers are busy.', flush=True)
 
     with h5py.File(plan[0][0], 'r') as f:
         time = f['time'][:]
@@ -299,8 +317,8 @@ def _main():
                     help='trajectories read per streaming pass (default 5000; lower it if RAM is tight)')
     ap.add_argument('--out',     default='analyze_data.png', help='output png')
     ap.add_argument('--ncores',  type=int, default=None,
-                    help='worker processes reading files in parallel (default: $SLURM_CPUS_PER_TASK, '
-                         'else 1); useful with a shard directory, one file is one task')
+                    help='worker processes reading files in parallel (default: the CPUs of the '
+                         'SLURM allocation, else 1); one file is one task')
     ap.add_argument('--c0',      type=float, default=None,
                     help='no-jump runs only: initial sampling factor (1 hemisphere, 2 full sphere); '
                          'default: inferred from S_z(0)')
