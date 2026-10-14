@@ -53,7 +53,20 @@ The trajectories are split into `nblocks` contiguous blocks (np.array_split) and
 standard deviation of the block means.  Only running totals and per-block sums are kept, so peak
 memory is O(nblocks*T + slab*T) at any n_traj.
 
-Requires a full_jump=True run with the 13-column /weights table.
+A jump run needs full_jump=True and the 13-column /weights table.
+
+--- no-jump runs (Tjump=None) ----------------------------------------------------------------------
+
+mash_rpmd writes no weights.dat without Tjump, so there is no /weights table.  Such a run is analysed
+as the Tjump -> infinity limit: no jump ever fires, so every t is in segment 0 and
+
+    W^(0)    = c0 (2|S_z(0)|, 2, 2, 3)          W^(0)(t) = c0 (2|S_z(t)|, 2, 2, 3)
+
+with S_z the bead mean, exactly what init_jump_weights / expand_weights_t would have produced.  Hence
+M_x = M_y = 0 identically.  The initial sampling factor c0 is not stored in such a run, so it is
+inferred from S_z(0): every trajectory on one side of the equator -> a hemisphere sample, c0 = 1
+(Tully's init_map_spin(0)); otherwise the full sphere, c0 = 2.  For a full-sphere run the chance of
+all n_traj landing on one side is 2^(1-n_traj).  --c0 overrides the inference.
 
 Usage (from the run dir, PYTHONPATH=<RP_MASH root>):
     python analyze_data.py                          # reads shards/ if present, else data.hdf
@@ -106,7 +119,25 @@ def _sources(path):
     return sorted(out, key=lambda s: s[1].min())
 
 
-def compute(path, nblocks=None, slab=5000):
+def _infer_c0(sources):
+    """Initial sampling factor of a no-jump run: 1 if every S_z(0) is on one side, else 2."""
+    sz0 = []
+    for p, _ in sources:
+        with h5py.File(p, 'r') as f:
+            sz0.append(f['mapSz'][:, 0, :].mean(axis=-1))
+    sz0 = np.concatenate(sz0)
+    return 1.0 if (np.all(sz0 <= 0.0) or np.all(sz0 >= 0.0)) else 2.0
+
+
+def _w0(Sz, c0):
+    """No-jump weights, Tjump -> infinity: (W_PP^(0), W_PC^(0)) and (W_PP^(0)(t), W_PC^(0)(t))."""
+    W  = {'W_PP': c0 * 2.0 * np.abs(Sz[:, :1]), 'W_PC': np.full(Sz.shape, c0 * 2.0)}
+    Wt = {'W_PP': c0 * 2.0 * np.abs(Sz),        'W_PC': W['W_PC']}
+    W['W_PP'] = np.broadcast_to(W['W_PP'], Sz.shape)
+    return W, Wt
+
+
+def compute(path, nblocks=None, slab=5000, c0=None):
     sources = _sources(path)
     n_traj = sum(ti.size for _, ti in sources)
 
@@ -114,11 +145,14 @@ def compute(path, nblocks=None, slab=5000):
         time = f['time'][:]
         cfg  = json.loads(f.attrs['config_json'])
         nbds = int(f.attrs['nbds'])
-        if 'weights' not in f or f['weights'].shape[2] < 13:
-            raise KeyError(f"{sources[0][0]} has no 13-column /weights table. The run needs Tjump and "
-                           f"a mash_rpmd that logs the time-dependent-weight inputs.")
-    if not cfg.get('full_jump', True):
+        jumps = 'weights' in f
+        if jumps and f['weights'].shape[2] < 13:
+            raise KeyError(f"{sources[0][0]} has a {f['weights'].shape[2]}-column /weights table, "
+                           f"expected 13. The run predates the time-dependent-weight inputs; re-run it.")
+    if jumps and not cfg.get('full_jump', True):
         raise ValueError('the time-dependent weights are only defined for full_jump=True runs')
+    if not jumps and c0 is None:
+        c0 = _infer_c0(sources)
 
     # contiguous blocks over the trajectory RANK, identical to np.array_split(..., axis=0)
     nb = n_traj if nblocks is None else max(1, min(int(nblocks), n_traj))
@@ -138,6 +172,9 @@ def compute(path, nblocks=None, slab=5000):
         with h5py.File(p, 'r') as f:
             if not np.array_equal(f['time'][:], time):
                 raise ValueError(f'{p}: time grid differs from {sources[0][0]}')
+            if ('weights' in f) != jumps:
+                raise ValueError(f'{p}: /weights is {"missing" if jumps else "present"}, unlike '
+                                 f'{sources[0][0]} -- these files come from different runs')
             for lo in range(0, ti.size, slab):
                 hi  = min(lo + slab, ti.size)
                 sel = slice(lo, hi)
@@ -148,11 +185,14 @@ def compute(path, nblocks=None, slab=5000):
                 hp = np.heaviside( Sz, 0.5).mean(axis=2)              # (s, T) upper adiabat
                 hm = np.heaviside(-Sz, 0.5).mean(axis=2)              # (s, T) lower adiabat
 
-                W  = expand_weights(f, time=time, sel=sel)                    # W^(m)
-                Wt = expand_weights_t(f, sel=sel, S=(Sx, Sy, Sz.mean(axis=2)))  # W^(m)(t)
+                if jumps:
+                    W  = expand_weights(f, time=time, sel=sel)                      # W^(m)
+                    Wt = expand_weights_t(f, sel=sel, S=(Sx, Sy, Sz.mean(axis=2)))  # W^(m)(t)
+                    n_jumps += int(f['n_weights'][sel].sum() - (hi - lo))  # row 0 is t=0, not a jump
+                else:
+                    W, Wt = _w0(Sz.mean(axis=2), c0)                                # Tjump -> inf
                 dPP = Wt['W_PP'] - W['W_PP']
                 dPC = Wt['W_PC'] - W['W_PC']
-                n_jumps += int(f['n_weights'][sel].sum() - (hi - lo))  # row 0 is t=0, not a jump
 
                 vals = {'Cp': W['W_PP'] * hp, 'Cm': W['W_PP'] * hm,
                         'Cx': W['W_PC'] * Sx, 'Cy': W['W_PC'] * Sy,
@@ -171,6 +211,7 @@ def compute(path, nblocks=None, slab=5000):
     W_mean, dW_mean = tot_w / n_traj, tot_dw / n_traj
     r.update(time=time, n_traj=n_traj, nbds=nbds, nblocks=nb, n_jumps=n_jumps,
              n_files=len(sources), Tjump=cfg.get('Tjump'), full_jump=cfg.get('full_jump'),
+             jumps=jumps, c0=c0,
              W_mean=W_mean,
              identity_C=float(np.max(np.abs(r['Cp'] + r['Cm'] - W_mean))),
              identity_M=float(np.max(np.abs(r['Mp'] + r['Mm'] - dW_mean))))
@@ -229,16 +270,24 @@ def _main():
     ap.add_argument('--slab',    type=int, default=5000,
                     help='trajectories read per streaming pass (default 5000; lower it if RAM is tight)')
     ap.add_argument('--out',     default='analyze_data.png', help='output png')
+    ap.add_argument('--c0',      type=float, default=None,
+                    help='no-jump runs only: initial sampling factor (1 hemisphere, 2 full sphere); '
+                         'default: inferred from S_z(0)')
     a = ap.parse_args()
     path = a.file or ('shards' if os.path.isdir('shards') else 'data.hdf')
 
-    r = compute(path, nblocks=a.nblocks, slab=a.slab)
+    r = compute(path, nblocks=a.nblocks, slab=a.slab, c0=a.c0)
     _plot(a.out, r, tmax=a.tmax)
 
     print(f"[cm] {path}: n_traj={r['n_traj']} from {r['n_files']} file(s), nbds={r['nbds']}, "
           f"nblocks={r['nblocks']}")
-    print(f"[cm] Tjump={r['Tjump']} full_jump={r['full_jump']}  "
-          f"total jumps across all trajectories: {r['n_jumps']}")
+    if r['jumps']:
+        print(f"[cm] Tjump={r['Tjump']} full_jump={r['full_jump']}  "
+              f"total jumps across all trajectories: {r['n_jumps']}")
+    else:
+        print(f"[cm] no /weights table (Tjump={r['Tjump']}): analysed as Tjump -> infinity, "
+              f"W^(0) only, c0={r['c0']:g}" + (' (from --c0)' if a.c0 is not None else
+                                                ' (inferred from S_z(0))'))
     for k, name in (('Cp', 'C_+'), ('Cm', 'C_-'), ('Cx', 'C_x'), ('Cy', 'C_y'),
                     ('Mp', 'M_+'), ('Mm', 'M_-'), ('Mx', 'M_x'), ('My', 'M_y')):
         print(f"[cm] {name}(0)={r[k][0]: .6e} +/- {r[k + '_SE'][0]:.3e}   "
