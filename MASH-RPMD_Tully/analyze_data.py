@@ -41,38 +41,53 @@ Exact identities, checked and reported on the console (h(x) + h(-x) = 1 bead by 
 
     C_+(t) + C_-(t) = < W_PP^(m) >              M_+(t) + M_-(t) = < W_PP^(m)(t) - W_PP^(m) >
 
---- input: data.hdf OR the shards directly ---------------------------------------------------------
+--- input: the shards directly (or a data.hdf) ------------------------------------------------------
 
 --file takes a directory of workflow.shards files (shards/shard_*.hdf) or a merged data.hdf
 (python -m workflow.shards / workflow.consolidate).  Shards have data.hdf's layout and are read
-directly, so a sharded run needs NO merge step: the shards are the dataset.  Trajectories are ranked by index across the whole run (shards hold
-disjoint ascending ranges; within a shard rows are ranked by traj_index, since a resumed shard can
-commit out of order), and blocks are contiguous in that rank -- the same split analyze_cpm.py makes
-on a sorted data.hdf.  So the shards and the merged file give the same result, error bars included.
+directly, so a sharded run needs NO merge step: the shards are the dataset.
 
---- parallel map-reduce (the recommended way on a cluster) -----------------------------------------
+--- how it runs: compiled, parallel, cached ---------------------------------------------------------
 
-compute() is a map-reduce over the files (workflow.reduce): --ncores worker processes each open whole
-shards read-only and return their partial sums (_file_partial: totals plus the sums of the one or two
-error-bar blocks a shard touches), and the parent adds them up.  Run it as ONE multi-core job, not on
-a login node.  Without --ncores it uses the CPUs of the SLURM allocation it runs in:
-$SLURM_CPUS_PER_TASK if set (-c / --cpus-per-task), otherwise -- inside any SLURM job, e.g. -n N,
---exclusive, or an interactive desktop -- the number of CPUs the job confines it to; outside SLURM, 1.
-The first line of output says how many workers it is using and why; --ncores N overrides it.
+The input is cut into UNITS of at most --unit-rows trajectories of one file (default 1000 = one
+production shard; a data.hdf or a bigger shard is sliced).  Each unit is reduced to its partial sums
+-- the 8 observables, <W_PP>, <W_PP(t) - W_PP>, the jump count -- by one compiled (numba) pass over
+trajectories x times (_accumulate), on --ncores worker processes, and the parent adds the partials.
 
-    #SBATCH --cpus-per-task=32
-    #SBATCH --mem=32G                       # ~ ncores x slab x T x nbds x 8 B x ~10 arrays, see --slab
+Each partial is CACHED in <file>_partials/<version>/ (e.g. shards_partials/cm_v1/shard_0042_0_1000.npz)
+and reused by every later run, so a unit is reduced once, ever:
+
+  * run it WHILE production is going: each run only computes the shards finished since the last one,
+    and the final run after production is almost entirely reads of small cached partials;
+  * a shard still being written (fewer committed rows than its index range) is analysed afresh every
+    run and never cached.  It is opened without an HDF5 lock, so the analysis never blocks the
+    production writer; if it is caught mid-append it is skipped with a warning.  Numbers that include
+    in-progress shards are provisional -- rerun once production is done;
+  * a cached partial is reused only if the source file's size, mtime and committed rows, the row
+    range and the analysis version (_VERSION) all match; --refresh recomputes everything, --no-cache
+    neither reads nor writes partials.  Bump _VERSION whenever an observable's definition changes.
+
+Run it as ONE multi-core job, not on a login node.  Without --ncores it uses the CPUs of the SLURM
+allocation it runs in: $SLURM_CPUS_PER_TASK if set (-c / --cpus-per-task), otherwise -- inside any
+SLURM job, e.g. -n N, --exclusive, or an interactive desktop -- the number of CPUs the job confines it
+to; outside SLURM, 1.  The first line of output says how many units came from the cache, how many
+were computed, and on how many workers.  All cores must be on ONE node.
+
+    #SBATCH --nodes=1 --ntasks=1 --cpus-per-task=24
+    #SBATCH --mem=24G                       # a unit is ~ unit_rows x T x nbds x 8 B x 3 arrays
     #SBATCH --time=01:00:00                 # plus the account / env lines of config['slurm']
     python analyze_data.py --file shards --nblocks 100
 
-A merged data.hdf is a single file and so a single task (no parallelism) -- another reason not to
-merge.  The result does not depend on --ncores, up to summation-order round-off.
-
 --- block errors and memory ------------------------------------------------------------------------
 
-The trajectories are split into `nblocks` contiguous blocks (np.array_split) and the SE is the
-standard deviation of the block means.  Only running totals and per-block sums are kept, so peak
-memory is O(nblocks*T) in the parent plus O(slab*T*nbds) per worker, at any n_traj.
+The SE is the standard deviation of `nblocks` block means, the blocks being contiguous groups of
+whole units (np.array_split over the units, in trajectory order; block mean = block sum / block
+count).  With full equal shards and nblocks dividing the number of units (production: 2000 shards,
+100 blocks) this is exactly the split into contiguous blocks of trajectories that analyze_cpm.py
+makes; otherwise block edges sit on unit edges instead -- an equally valid batch-means SE, since the
+trajectories are independent.  The means do not depend on the blocking at all.  If nblocks exceeds
+the number of units, there is one block per unit.  Memory: O(nblocks*T) in the parent plus one unit
+per worker.
 
 A jump run needs full_jump=True and the 15-column /weights table (older 13-column runs used the
 superseded definition with dot and sgn taken at t, and are refused).
@@ -93,18 +108,21 @@ all n_traj landing on one side is 2^(1-n_traj).  --c0 overrides the inference.
 Usage (from the run dir, PYTHONPATH=<RP_MASH root>):
     python analyze_data.py                          # reads shards/ if present, else data.hdf
     python analyze_data.py --file shards --ncores 16
+    python analyze_data.py --file shards --refresh  # after changing an observable (or bump _VERSION)
     python analyze_data.py --file data.hdf --nblocks 20 --tmax 3000
 """
 
 import os
 import json
 import argparse
+import functools
 
 import numpy as np
 import h5py
 
-from workflow import expand_weights, expand_weights_t   # per-jump table -> dense W^(m), W^(m)(t)
-from workflow import shard_plan, block_ids, map_files, ncores_source   # parallel map-reduce
+from numba import njit
+
+from workflow import plan_units, map_cached, ncores_source, open_readonly   # cached map-reduce
 
 
 _NAMES = ('Cp', 'Cm', 'Cx', 'Cy', 'Mp', 'Mm', 'Mx', 'My')
@@ -117,126 +135,189 @@ def block_sem_from_means(block_means, n_blocks):
     return block_means.std(axis=0, ddof=1) / np.sqrt(n_blocks)
 
 
-def _w0(Sz, c0):
-    """No-jump weights, Tjump -> infinity: (W_PP^(0), W_PC^(0)) and (W_PP^(0)(t), W_PC^(0)(t))."""
-    W  = {'W_PP': c0 * 2.0 * np.abs(Sz[:, :1]), 'W_PC': np.full(Sz.shape, c0 * 2.0)}
-    Wt = {'W_PP': c0 * 2.0 * np.abs(Sz),        'W_PC': W['W_PC']}
-    W['W_PP'] = np.broadcast_to(W['W_PP'], Sz.shape)
-    return W, Wt
+# Bump whenever the observables or their weights change: every cached partial is then recomputed.
+_VERSION = 'cm_v1'
 
 
-def _file_partial(path, brow, jumps, slab, time):
+@njit(cache=True)
+def _accumulate(Sz, Sx, Sy, tab, cnt, time, jumps):
     """
-    MAP step: the partial sums of ONE file (a shard, or a whole data.hdf), run in a worker process.
-    brow[i] is the error-bar block of the file's row i (from its global trajectory rank). Returns
-    the totals over the file's trajectories, the sums per block it touches (a shard of a big run
-    touches one or two), and the sign range of S_z(0) for the no-jump c0 inference. No-jump runs are
-    summed with c0 = 1; every quantity is linear in the weights, so compute() rescales by c0 once.
+    The partial sums of one unit of trajectories, in one compiled pass over trajectories x times
+    (no dense weight arrays). Per trajectory k and time t, with m = #{jumps with t_jump <= t}
+    (searchsorted-right over the jump times, as expand_weights / expand_weights_t):
+
+        W_PP, W_PC   = /weights row m, columns W_PP, W_PC                         (expand_weights)
+        m = 0:  Wt_PP = W_CP^(0) |S_z(t)|,  Wt_PC = W_PC^(0)                      (expand_weights_t)
+        m > 0:  dot = Sx_post Sx_prev + Sy_post Sy_prev,   fac = 1 + sgn(Sz_n Sz_prev)
+                Wt_PP = dot W_PC_t + |S_z(t)| fac W_PP_t,  Wt_PC = 3/2 dot W_PC_t + fac W_PP_t
+
+    with the same operation order as workflow.consolidate. Without jumps (jumps=False) the weights
+    are the Tjump -> infinity ones with c0 = 1: W_PP = 2|S_z(0)|, W_PC = 2, Wt_PP = 2|S_z(t)|,
+    Wt_PC = 2 (compute() rescales by c0). h(+-S_z) is the bead mean of heaviside(+-S_z, 0.5);
+    S_x, S_y and the |S_z(t)| of the weights are bead means.
+    Returns tot (8, T) in _NAMES order, tot_w = sum W_PP, tot_dw = sum (Wt_PP - W_PP), the number of
+    jumps, and whether every S_z(0) is <= 0 / >= 0.
     """
-    T = time.size
-    tot = np.zeros((len(_NAMES), T))
-    blk = {}
-    tot_w = np.zeros(T); tot_dw = np.zeros(T)      # <W_PP>, <W_PP(t) - W_PP>: identity checks
+    n, T, nb = Sz.shape
+    tot = np.zeros((8, T))
+    tot_w = np.zeros(T)
+    tot_dw = np.zeros(T)
     n_jumps = 0
-    sz0_le0 = sz0_ge0 = True                       # every S_z(0) <= 0 / >= 0 (no-jump c0)
-    with h5py.File(path, 'r') as f:
+    le0 = True
+    ge0 = True
+    for k in range(n):
+        c = cnt[k]
+        if jumps:
+            n_jumps += c - 1                         # row 0 is the t=0 sample, not a jump
+        m = 0
+        W0 = 0.0
+        for t in range(T):
+            hp = 0.0; hm = 0.0; sx = 0.0; sy = 0.0; sz = 0.0
+            for b in range(nb):
+                z = Sz[k, t, b]
+                hp += 1.0 if z > 0.0 else (0.5 if z == 0.0 else 0.0)
+                hm += 1.0 if z < 0.0 else (0.5 if z == 0.0 else 0.0)
+                sx += Sx[k, t, b]; sy += Sy[k, t, b]; sz += z
+            hp /= nb; hm /= nb; sx /= nb; sy /= nb; sz /= nb
+            asz = np.abs(sz)
+            if t == 0:
+                le0 = le0 and sz <= 0.0
+                ge0 = ge0 and sz >= 0.0
+            if jumps:
+                while m + 1 < c and tab[k, m + 1, 0] <= time[t]:
+                    m += 1
+                W_PP = tab[k, m, 2]
+                W_PC = tab[k, m, 4]
+                if m == 0:
+                    Wt_PP = tab[k, 0, 3] * asz
+                    Wt_PC = tab[k, 0, 4]
+                else:
+                    dot = tab[k, m, 13] * tab[k, m, 6] + tab[k, m, 14] * tab[k, m, 7]
+                    fac = 1.0 + np.sign(tab[k, m, 1] * tab[k, m, 8])
+                    Wt_PP = dot * tab[k, m, 11] + asz * fac * tab[k, m, 9]
+                    Wt_PC = 1.5 * dot * tab[k, m, 11] + fac * tab[k, m, 9]
+            else:
+                if t == 0:
+                    W0 = 2.0 * asz
+                W_PP = W0
+                W_PC = 2.0
+                Wt_PP = 2.0 * asz
+                Wt_PC = 2.0
+            dPP = Wt_PP - W_PP
+            dPC = Wt_PC - W_PC
+            tot[0, t] += W_PP * hp
+            tot[1, t] += W_PP * hm
+            tot[2, t] += W_PC * sx
+            tot[3, t] += W_PC * sy
+            tot[4, t] += dPP * hp
+            tot[5, t] += dPP * hm
+            tot[6, t] += dPC * sx
+            tot[7, t] += dPC * sy
+            tot_w[t] += W_PP
+            tot_dw[t] += dPP
+    return tot, tot_w, tot_dw, n_jumps, le0, ge0
+
+
+def _unit_partial(path, lo, hi, jumps, time):
+    """
+    MAP step, run in a worker: the partial sums of rows lo..hi of one file (a shard or a data.hdf).
+    workflow.map_cached caches the result per unit, so a unit is reduced once.
+    """
+    with open_readonly(path) as f:                     # no lock: never blocks a running writer
         if not np.array_equal(f['time'][:], time):
             raise ValueError(f'{path}: time grid differs from the rest of the run')
         if ('weights' in f) != jumps:
             raise ValueError(f'{path}: /weights is {"missing" if jumps else "present"}, unlike the '
                              f'first file -- these files come from different runs')
-        for lo in range(0, brow.size, slab):
-            hi  = min(lo + slab, brow.size)
-            sel = slice(lo, hi)
-
-            Sz = f['mapSz'][sel]                                  # (s, T, nbds)
-            Sx = f['mapSx'][sel].mean(axis=2)                     # (s, T) bead means
-            Sy = f['mapSy'][sel].mean(axis=2)
-            hp = np.heaviside( Sz, 0.5).mean(axis=2)              # (s, T) upper adiabat
-            hm = np.heaviside(-Sz, 0.5).mean(axis=2)              # (s, T) lower adiabat
-
-            if jumps:
-                W  = expand_weights(f, time=time, sel=sel)                      # W^(m)
-                Wt = expand_weights_t(f, sel=sel, S=(Sx, Sy, Sz.mean(axis=2)))  # W^(m)(t)
-                n_jumps += int(f['n_weights'][sel].sum() - (hi - lo))  # row 0 is t=0, not a jump
-            else:
-                sz0 = Sz[:, 0, :].mean(axis=-1)
-                sz0_le0 &= bool(np.all(sz0 <= 0.0)); sz0_ge0 &= bool(np.all(sz0 >= 0.0))
-                W, Wt = _w0(Sz.mean(axis=2), 1.0)                               # Tjump -> inf
-            dPP = Wt['W_PP'] - W['W_PP']
-            dPC = Wt['W_PC'] - W['W_PC']
-
-            vals = np.stack([W['W_PP'] * hp, W['W_PP'] * hm,       # Cp, Cm   (order of _NAMES)
-                             W['W_PC'] * Sx, W['W_PC'] * Sy,       # Cx, Cy
-                             dPP * hp,       dPP * hm,             # Mp, Mm
-                             dPC * Sx,       dPC * Sy])            # Mx, My   -> (8, s, T)
-            tot += vals.sum(axis=1)
-            b = brow[lo:hi]
-            for k in np.unique(b):
-                v = vals[:, b == k].sum(axis=1)
-                blk[int(k)] = blk[int(k)] + v if int(k) in blk else v
-            tot_w  += W['W_PP'].sum(axis=0)
-            tot_dw += dPP.sum(axis=0)
-    return dict(tot=tot, blk=blk, tot_w=tot_w, tot_dw=tot_dw, n_jumps=n_jumps,
-                sz0_le0=sz0_le0, sz0_ge0=sz0_ge0)
+        Sz = np.ascontiguousarray(f['mapSz'][lo:hi], dtype=np.float64)       # (s, T, nbds)
+        Sx = np.ascontiguousarray(f['mapSx'][lo:hi], dtype=np.float64)
+        Sy = np.ascontiguousarray(f['mapSy'][lo:hi], dtype=np.float64)
+        if jumps:
+            tab = np.ascontiguousarray(f['weights'][lo:hi], dtype=np.float64)  # (s, R, 15)
+            cnt = np.ascontiguousarray(f['n_weights'][lo:hi], dtype=np.int64)
+        else:
+            tab = np.zeros((hi - lo, 1, 15)); cnt = np.ones(hi - lo, dtype=np.int64)
+    tot, tot_w, tot_dw, n_jumps, le0, ge0 = _accumulate(Sz, Sx, Sy, tab, cnt, time, jumps)
+    return dict(n=np.int64(hi - lo), tot=tot, tot_w=tot_w, tot_dw=tot_dw,
+                n_jumps=np.int64(n_jumps), sz0_le0=np.bool_(le0), sz0_ge0=np.bool_(ge0))
 
 
-def compute(path, nblocks=None, slab=5000, c0=None, ncores=None):
+def default_cache_dir(path):
+    """<shards>_partials/<_VERSION> next to a shard directory, <data>_partials/... for a data.hdf."""
+    base = os.path.normpath(path)
+    if not os.path.isdir(base):
+        base = os.path.splitext(base)[0]
+    return os.path.join(base + '_partials', _VERSION)
+
+
+def compute(path, nblocks=None, slab=None, c0=None, ncores=None, unit_rows=1000,
+            cache=True, refresh=False, cache_dir=None):
     """
-    REDUCE step: run _file_partial over every file of `path` (a shard directory or a data.hdf) on
-    `ncores` worker processes and combine the partials. ncores=None detects the CPUs of the SLURM
-    allocation (workflow.ncores_source), else 1.
+    REDUCE step. `path` (a shard directory or a data.hdf) is split into units of at most unit_rows
+    rows of one file (workflow.plan_units); every unit is reduced to its partial sums by
+    _unit_partial on `ncores` workers (default: the CPUs of the SLURM allocation, else 1), or read
+    back from the cache of an earlier run (workflow.map_cached), and the partials are added up.
+    The error-bar blocks are nblocks contiguous groups of whole units. (slab is accepted for
+    backward compatibility and ignored: a unit is read in one piece.)
     """
-    plan = shard_plan(path)                         # [(file, traj_index, rank_offset)]
-    n_traj = sum(ti.size for _, ti, _ in plan)
+    units = plan_units(path, unit_rows)
+    with open_readonly(units[0].file) as f:
+        time = f['time'][:]
+        cfg  = json.loads(f.attrs['config_json'])
+        nbds = int(f.attrs['nbds'])
+        jumps = 'weights' in f
+        if jumps and f['weights'].shape[2] < 15:
+            raise KeyError(f"{units[0].file} has a {f['weights'].shape[2]}-column /weights table, "
+                           f"expected 15. The run predates the corrected time-dependent weights; "
+                           f"re-run it.")
+    if jumps and not cfg.get('full_jump', True):
+        raise ValueError('the time-dependent weights are only defined for full_jump=True runs')
 
     # parallel setup, reported so a silent fall-back to one core cannot go unnoticed
     if ncores is None:
         ncores, why = ncores_source()
     else:
         why = 'given --ncores'
-    busy = min(ncores, len(plan))
-    print(f'[cm] {len(plan)} file(s), {n_traj} trajectories: {busy} worker process(es) '
-          f'({why})', flush=True)
-    if ncores == 1 and why == 'not inside a SLURM job':
-        print('[cm] NOTE: running on ONE core. Pass --ncores N to use N cores.', flush=True)
-    elif ncores > len(plan):
-        print(f'[cm] NOTE: only {len(plan)} file(s) for {ncores} cores; work is split per file, so '
-              f'at most {len(plan)} workers are busy.', flush=True)
+    cache_dir = cache_dir or default_cache_dir(path)
+    parts, st = map_cached(functools.partial(_unit_partial, jumps=jumps, time=time), units,
+                           cache_dir, _VERSION, ncores=ncores, refresh=refresh, use_cache=cache)
+    n_inprog = sum(not u.complete for u in units)
+    print(f'[cm] {len(units)} unit(s) of <= {unit_rows} trajectories: {st["cached"]} from cache, '
+          f'{st["computed"] + st["in_progress"]} computed on {ncores} worker(s) ({why})'
+          + (f'; {n_inprog} unit(s) in shards still being written (never cached)' if n_inprog else '')
+          + ('' if cache else '; cache off'), flush=True)
+    for note in st['notes']:
+        print(f'[cm] WARNING: {note}', flush=True)
+    if ncores == 1 and why == 'not inside a SLURM job' and st['computed'] + st['in_progress'] > 1:
+        print('[cm] NOTE: computed on ONE core. Pass --ncores N to use N cores.', flush=True)
 
-    with h5py.File(plan[0][0], 'r') as f:
-        time = f['time'][:]
-        cfg  = json.loads(f.attrs['config_json'])
-        nbds = int(f.attrs['nbds'])
-        jumps = 'weights' in f
-        if jumps and f['weights'].shape[2] < 15:
-            raise KeyError(f"{plan[0][0]} has a {f['weights'].shape[2]}-column /weights table, "
-                           f"expected 15. The run predates the corrected time-dependent weights; "
-                           f"re-run it.")
-    if jumps and not cfg.get('full_jump', True):
-        raise ValueError('the time-dependent weights are only defined for full_jump=True runs')
-
-    # contiguous blocks over the trajectory RANK across all files, identical to np.array_split(...,
-    # axis=0) on a sorted data.hdf; each file gets the block of each of its rows (rows ranked by
-    # traj_index, since a resumed shard can commit out of order)
-    block_of, nb = block_ids(n_traj, nblocks)
-    block_sizes = np.bincount(block_of, minlength=nb).astype(float)
-    tasks = [(p, block_of[off + np.argsort(np.argsort(ti, kind='stable'))], jumps, slab, time)
-             for p, ti, off in plan]
-
+    used = [p for p in parts if p is not None]
+    n_units = len(used)
+    if n_units == 0:
+        raise RuntimeError('no unit could be read: every file is still being written. Rerun later.')
+    n_traj = int(sum(int(p['n']) for p in used))
     T = time.size
+
+    # error bars: nblocks contiguous groups of whole units, block mean = block sum / block count
+    nb = n_units if nblocks is None else max(1, min(int(nblocks), n_units))
+    if nblocks is not None and int(nblocks) > n_units:
+        print(f'[cm] NOTE: only {n_units} units, so {nb} error-bar blocks instead of {nblocks}',
+              flush=True)
     tot = np.zeros((len(_NAMES), T))
     blk = np.zeros((len(_NAMES), nb, T))
+    block_sizes = np.zeros(nb)
     tot_w = np.zeros(T); tot_dw = np.zeros(T)
     n_jumps = 0
     sz0_le0 = sz0_ge0 = True
-    for part in map_files(_file_partial, tasks, ncores):
-        tot += part['tot']
-        for k, v in part['blk'].items():
-            blk[:, k] += v
-        tot_w += part['tot_w']; tot_dw += part['tot_dw']
-        n_jumps += part['n_jumps']
-        sz0_le0 &= part['sz0_le0']; sz0_ge0 &= part['sz0_ge0']
+    for b, grp in enumerate(np.array_split(np.arange(n_units), nb)):
+        for i in grp:
+            p = used[i]
+            tot += p['tot']
+            blk[:, b] += p['tot']
+            block_sizes[b] += int(p['n'])
+            tot_w += p['tot_w']; tot_dw += p['tot_dw']
+            n_jumps += int(p['n_jumps'])
+            sz0_le0 &= bool(p['sz0_le0']); sz0_ge0 &= bool(p['sz0_ge0'])
 
     if not jumps:
         # c0 not stored without Tjump: all S_z(0) on one side -> hemisphere sample (c0 = 1), else 2.
@@ -250,8 +331,8 @@ def compute(path, nblocks=None, slab=5000, c0=None, ncores=None):
               for i, k in enumerate(_NAMES)})
     W_mean, dW_mean = tot_w / n_traj, tot_dw / n_traj
     r.update(time=time, n_traj=n_traj, nbds=nbds, nblocks=nb, n_jumps=n_jumps,
-             n_files=len(plan), Tjump=cfg.get('Tjump'), full_jump=cfg.get('full_jump'),
-             jumps=jumps, c0=c0,
+             n_files=len({u.file for u in units}), n_units=n_units, cache_stats=st,
+             Tjump=cfg.get('Tjump'), full_jump=cfg.get('full_jump'), jumps=jumps, c0=c0,
              W_mean=W_mean,
              identity_C=float(np.max(np.abs(r['Cp'] + r['Cm'] - W_mean))),
              identity_M=float(np.max(np.abs(r['Mp'] + r['Mm'] - dW_mean))))
@@ -313,23 +394,35 @@ def _main():
                     help='a shard directory or a data.hdf (default: shards/ if it exists, else data.hdf)')
     ap.add_argument('--nblocks', type=int, default=100, help='trajectory blocks (default 100)')
     ap.add_argument('--tmax',    type=float, default=None, help='truncate the PLOT to t <= tmax')
-    ap.add_argument('--slab',    type=int, default=5000,
-                    help='trajectories read per streaming pass (default 5000; lower it if RAM is tight)')
+    ap.add_argument('--unit-rows', type=int, default=1000,
+                    help='trajectories per unit of work / cached partial (default 1000 = one shard of '
+                         'the production config); the error-bar blocks are groups of whole units')
+    ap.add_argument('--slab',    type=int, default=None, help=argparse.SUPPRESS)   # superseded by units
+    ap.add_argument('--no-cache', action='store_true',
+                    help='neither read nor write the per-unit partials (default: cache them in '
+                         '<file>_partials/' + _VERSION + '/ and reuse them on the next run)')
+    ap.add_argument('--refresh', action='store_true',
+                    help='recompute (and re-cache) every unit, ignoring existing partials')
+    ap.add_argument('--cache-dir', default=None, help='where the partials live (default: see --no-cache)')
     ap.add_argument('--out',     default='analyze_data.png', help='output png')
     ap.add_argument('--ncores',  type=int, default=None,
-                    help='worker processes reading files in parallel (default: the CPUs of the '
-                         'SLURM allocation, else 1); one file is one task')
+                    help='worker processes computing units in parallel (default: the CPUs of the '
+                         'SLURM allocation, else 1)')
     ap.add_argument('--c0',      type=float, default=None,
                     help='no-jump runs only: initial sampling factor (1 hemisphere, 2 full sphere); '
                          'default: inferred from S_z(0)')
     a = ap.parse_args()
     path = a.file or ('shards' if os.path.isdir('shards') else 'data.hdf')
 
-    r = compute(path, nblocks=a.nblocks, slab=a.slab, c0=a.c0, ncores=a.ncores)
+    try:
+        r = compute(path, nblocks=a.nblocks, c0=a.c0, ncores=a.ncores, unit_rows=a.unit_rows,
+                    cache=not a.no_cache, refresh=a.refresh, cache_dir=a.cache_dir)
+    except RuntimeError as e:
+        raise SystemExit(f'[cm] {e}')
     _plot(a.out, r, tmax=a.tmax)
 
-    print(f"[cm] {path}: n_traj={r['n_traj']} from {r['n_files']} file(s), nbds={r['nbds']}, "
-          f"nblocks={r['nblocks']}")
+    print(f"[cm] {path}: n_traj={r['n_traj']} from {r['n_files']} file(s) / {r['n_units']} unit(s), "
+          f"nbds={r['nbds']}, nblocks={r['nblocks']}")
     if r['jumps']:
         print(f"[cm] Tjump={r['Tjump']} full_jump={r['full_jump']}  "
               f"total jumps across all trajectories: {r['n_jumps']}")
