@@ -1,6 +1,6 @@
 """
-analyze_data.py -- jump-weighted populations and coherences C_a(t), and their time-dependent-weight
-corrections M_a(t), in one streaming pass.  Output is a single 2x2 figure (analyze_data.png).
+analyze_cm.py -- jump-weighted populations and coherences C_a(t), and their time-dependent-weight
+corrections M_a(t), in one streaming pass.  Output is a single 2x2 figure (analyze_cm.png).
 Successor to analyze_cpm.py, whose C_+ / C_- it reproduces exactly.
 
 --- the observables --------------------------------------------------------------------------------
@@ -43,18 +43,33 @@ Exact identities, checked and reported on the console (h(x) + h(-x) = 1 bead by 
 
 --- input: data.hdf OR the shards directly ---------------------------------------------------------
 
---file takes either a merged data.hdf (python -m workflow.shards / workflow.consolidate) or a
-directory of workflow.shards files (shards/shard_*.hdf).  Shards have data.hdf's layout, so they are
-read directly -- no merge step.  Trajectories are ranked by index across the whole run (shards hold
+--file takes a directory of workflow.shards files (shards/shard_*.hdf) or a merged data.hdf
+(python -m workflow.shards / workflow.consolidate).  Shards have data.hdf's layout and are read
+directly, so a sharded run needs NO merge step: the shards are the dataset.  Trajectories are ranked by index across the whole run (shards hold
 disjoint ascending ranges; within a shard rows are ranked by traj_index, since a resumed shard can
 commit out of order), and blocks are contiguous in that rank -- the same split analyze_cpm.py makes
 on a sorted data.hdf.  So the shards and the merged file give the same result, error bars included.
+
+--- parallel map-reduce (the recommended way on a cluster) -----------------------------------------
+
+compute() is a map-reduce over the files (workflow.reduce): --ncores worker processes each open whole
+shards read-only and return their partial sums (_file_partial: totals plus the sums of the one or two
+error-bar blocks a shard touches), and the parent adds them up.  Run it as ONE multi-core job, not on
+a login node; the default --ncores is $SLURM_CPUS_PER_TASK, so inside a job it uses what it was given:
+
+    #SBATCH --cpus-per-task=32
+    #SBATCH --mem=32G                       # ~ ncores x slab x T x nbds x 8 B x ~10 arrays, see --slab
+    #SBATCH --time=01:00:00                 # plus the account / env lines of config['slurm']
+    python analyze_data.py --file shards --nblocks 100
+
+A merged data.hdf is a single file and so a single task (no parallelism) -- another reason not to
+merge.  The result does not depend on --ncores, up to summation-order round-off.
 
 --- block errors and memory ------------------------------------------------------------------------
 
 The trajectories are split into `nblocks` contiguous blocks (np.array_split) and the SE is the
 standard deviation of the block means.  Only running totals and per-block sums are kept, so peak
-memory is O(nblocks*T + slab*T) at any n_traj.
+memory is O(nblocks*T) in the parent plus O(slab*T*nbds) per worker, at any n_traj.
 
 A jump run needs full_jump=True and the 15-column /weights table (older 13-column runs used the
 superseded definition with dot and sgn taken at t, and are refused).
@@ -74,21 +89,19 @@ all n_traj landing on one side is 2^(1-n_traj).  --c0 overrides the inference.
 
 Usage (from the run dir, PYTHONPATH=<RP_MASH root>):
     python analyze_data.py                          # reads shards/ if present, else data.hdf
+    python analyze_data.py --file shards --ncores 16
     python analyze_data.py --file data.hdf --nblocks 20 --tmax 3000
 """
 
 import os
-import glob
 import json
 import argparse
 
 import numpy as np
 import h5py
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
 from workflow import expand_weights, expand_weights_t   # per-jump table -> dense W^(m), W^(m)(t)
+from workflow import shard_plan, block_ids, map_files   # parallel map-reduce over the files
 
 
 _NAMES = ('Cp', 'Cm', 'Cx', 'Cy', 'Mp', 'Mm', 'Mx', 'My')
@@ -101,38 +114,6 @@ def block_sem_from_means(block_means, n_blocks):
     return block_means.std(axis=0, ddof=1) / np.sqrt(n_blocks)
 
 
-def _sources(path):
-    """
-    [(file path, traj_index)] in trajectory order: one entry for a data.hdf, one per shard for a
-    shard directory (sorted by smallest index; shards hold disjoint ascending ranges).
-    """
-    if os.path.isdir(path):
-        paths = glob.glob(os.path.join(path, 'shard_*.hdf'))
-        if not paths:
-            raise FileNotFoundError(f'no shard_*.hdf in {path}')
-    else:
-        paths = [path]
-    out = []
-    for p in paths:
-        with h5py.File(p, 'r') as f:
-            ti = f['traj_index'][:]
-        if ti.size:
-            out.append((p, ti))
-    if not out:
-        raise FileNotFoundError(f'no committed trajectories in {path}')
-    return sorted(out, key=lambda s: s[1].min())
-
-
-def _infer_c0(sources):
-    """Initial sampling factor of a no-jump run: 1 if every S_z(0) is on one side, else 2."""
-    sz0 = []
-    for p, _ in sources:
-        with h5py.File(p, 'r') as f:
-            sz0.append(f['mapSz'][:, 0, :].mean(axis=-1))
-    sz0 = np.concatenate(sz0)
-    return 1.0 if (np.all(sz0 <= 0.0) or np.all(sz0 >= 0.0)) else 2.0
-
-
 def _w0(Sz, c0):
     """No-jump weights, Tjump -> infinity: (W_PP^(0), W_PC^(0)) and (W_PP^(0)(t), W_PC^(0)(t))."""
     W  = {'W_PP': c0 * 2.0 * np.abs(Sz[:, :1]), 'W_PC': np.full(Sz.shape, c0 * 2.0)}
@@ -141,81 +122,117 @@ def _w0(Sz, c0):
     return W, Wt
 
 
-def compute(path, nblocks=None, slab=5000, c0=None):
-    sources = _sources(path)
-    n_traj = sum(ti.size for _, ti in sources)
+def _file_partial(path, brow, jumps, slab, time):
+    """
+    MAP step: the partial sums of ONE file (a shard, or a whole data.hdf), run in a worker process.
+    brow[i] is the error-bar block of the file's row i (from its global trajectory rank). Returns
+    the totals over the file's trajectories, the sums per block it touches (a shard of a big run
+    touches one or two), and the sign range of S_z(0) for the no-jump c0 inference. No-jump runs are
+    summed with c0 = 1; every quantity is linear in the weights, so compute() rescales by c0 once.
+    """
+    T = time.size
+    tot = np.zeros((len(_NAMES), T))
+    blk = {}
+    tot_w = np.zeros(T); tot_dw = np.zeros(T)      # <W_PP>, <W_PP(t) - W_PP>: identity checks
+    n_jumps = 0
+    sz0_le0 = sz0_ge0 = True                       # every S_z(0) <= 0 / >= 0 (no-jump c0)
+    with h5py.File(path, 'r') as f:
+        if not np.array_equal(f['time'][:], time):
+            raise ValueError(f'{path}: time grid differs from the rest of the run')
+        if ('weights' in f) != jumps:
+            raise ValueError(f'{path}: /weights is {"missing" if jumps else "present"}, unlike the '
+                             f'first file -- these files come from different runs')
+        for lo in range(0, brow.size, slab):
+            hi  = min(lo + slab, brow.size)
+            sel = slice(lo, hi)
 
-    with h5py.File(sources[0][0], 'r') as f:
+            Sz = f['mapSz'][sel]                                  # (s, T, nbds)
+            Sx = f['mapSx'][sel].mean(axis=2)                     # (s, T) bead means
+            Sy = f['mapSy'][sel].mean(axis=2)
+            hp = np.heaviside( Sz, 0.5).mean(axis=2)              # (s, T) upper adiabat
+            hm = np.heaviside(-Sz, 0.5).mean(axis=2)              # (s, T) lower adiabat
+
+            if jumps:
+                W  = expand_weights(f, time=time, sel=sel)                      # W^(m)
+                Wt = expand_weights_t(f, sel=sel, S=(Sx, Sy, Sz.mean(axis=2)))  # W^(m)(t)
+                n_jumps += int(f['n_weights'][sel].sum() - (hi - lo))  # row 0 is t=0, not a jump
+            else:
+                sz0 = Sz[:, 0, :].mean(axis=-1)
+                sz0_le0 &= bool(np.all(sz0 <= 0.0)); sz0_ge0 &= bool(np.all(sz0 >= 0.0))
+                W, Wt = _w0(Sz.mean(axis=2), 1.0)                               # Tjump -> inf
+            dPP = Wt['W_PP'] - W['W_PP']
+            dPC = Wt['W_PC'] - W['W_PC']
+
+            vals = np.stack([W['W_PP'] * hp, W['W_PP'] * hm,       # Cp, Cm   (order of _NAMES)
+                             W['W_PC'] * Sx, W['W_PC'] * Sy,       # Cx, Cy
+                             dPP * hp,       dPP * hm,             # Mp, Mm
+                             dPC * Sx,       dPC * Sy])            # Mx, My   -> (8, s, T)
+            tot += vals.sum(axis=1)
+            b = brow[lo:hi]
+            for k in np.unique(b):
+                v = vals[:, b == k].sum(axis=1)
+                blk[int(k)] = blk[int(k)] + v if int(k) in blk else v
+            tot_w  += W['W_PP'].sum(axis=0)
+            tot_dw += dPP.sum(axis=0)
+    return dict(tot=tot, blk=blk, tot_w=tot_w, tot_dw=tot_dw, n_jumps=n_jumps,
+                sz0_le0=sz0_le0, sz0_ge0=sz0_ge0)
+
+
+def compute(path, nblocks=None, slab=5000, c0=None, ncores=None):
+    """
+    REDUCE step: run _file_partial over every file of `path` (a shard directory or a data.hdf) on
+    `ncores` worker processes (default: $SLURM_CPUS_PER_TASK, else 1) and combine the partials.
+    """
+    plan = shard_plan(path)                         # [(file, traj_index, rank_offset)]
+    n_traj = sum(ti.size for _, ti, _ in plan)
+
+    with h5py.File(plan[0][0], 'r') as f:
         time = f['time'][:]
         cfg  = json.loads(f.attrs['config_json'])
         nbds = int(f.attrs['nbds'])
         jumps = 'weights' in f
         if jumps and f['weights'].shape[2] < 15:
-            raise KeyError(f"{sources[0][0]} has a {f['weights'].shape[2]}-column /weights table, "
+            raise KeyError(f"{plan[0][0]} has a {f['weights'].shape[2]}-column /weights table, "
                            f"expected 15. The run predates the corrected time-dependent weights; "
                            f"re-run it.")
     if jumps and not cfg.get('full_jump', True):
         raise ValueError('the time-dependent weights are only defined for full_jump=True runs')
-    if not jumps and c0 is None:
-        c0 = _infer_c0(sources)
 
-    # contiguous blocks over the trajectory RANK, identical to np.array_split(..., axis=0)
-    nb = n_traj if nblocks is None else max(1, min(int(nblocks), n_traj))
-    block_of = np.concatenate([np.full(len(b), i, dtype=int)
-                               for i, b in enumerate(np.array_split(np.arange(n_traj), nb))])
+    # contiguous blocks over the trajectory RANK across all files, identical to np.array_split(...,
+    # axis=0) on a sorted data.hdf; each file gets the block of each of its rows (rows ranked by
+    # traj_index, since a resumed shard can commit out of order)
+    block_of, nb = block_ids(n_traj, nblocks)
     block_sizes = np.bincount(block_of, minlength=nb).astype(float)
+    tasks = [(p, block_of[off + np.argsort(np.argsort(ti, kind='stable'))], jumps, slab, time)
+             for p, ti, off in plan]
 
     T = time.size
-    tot = {k: np.zeros(T) for k in _NAMES}
-    blk = {k: np.zeros((nb, T)) for k in _NAMES}
-    tot_w = np.zeros(T); tot_dw = np.zeros(T)      # <W_PP>, <W_PP(t) - W_PP>: identity checks
+    tot = np.zeros((len(_NAMES), T))
+    blk = np.zeros((len(_NAMES), nb, T))
+    tot_w = np.zeros(T); tot_dw = np.zeros(T)
     n_jumps = 0
+    sz0_le0 = sz0_ge0 = True
+    for part in map_files(_file_partial, tasks, ncores):
+        tot += part['tot']
+        for k, v in part['blk'].items():
+            blk[:, k] += v
+        tot_w += part['tot_w']; tot_dw += part['tot_dw']
+        n_jumps += part['n_jumps']
+        sz0_le0 &= part['sz0_le0']; sz0_ge0 &= part['sz0_ge0']
 
-    offset = 0
-    for p, ti in sources:
-        rank = offset + np.argsort(np.argsort(ti, kind='stable'))    # global rank of each row
-        with h5py.File(p, 'r') as f:
-            if not np.array_equal(f['time'][:], time):
-                raise ValueError(f'{p}: time grid differs from {sources[0][0]}')
-            if ('weights' in f) != jumps:
-                raise ValueError(f'{p}: /weights is {"missing" if jumps else "present"}, unlike '
-                                 f'{sources[0][0]} -- these files come from different runs')
-            for lo in range(0, ti.size, slab):
-                hi  = min(lo + slab, ti.size)
-                sel = slice(lo, hi)
+    if not jumps:
+        # c0 not stored without Tjump: all S_z(0) on one side -> hemisphere sample (c0 = 1), else 2.
+        # For a full-sphere run the chance of all n_traj landing on one side is 2^(1-n_traj).
+        if c0 is None:
+            c0 = 1.0 if (sz0_le0 or sz0_ge0) else 2.0
+        tot *= c0; blk *= c0; tot_w *= c0; tot_dw *= c0
 
-                Sz = f['mapSz'][sel]                                  # (s, T, nbds)
-                Sx = f['mapSx'][sel].mean(axis=2)                     # (s, T) bead means
-                Sy = f['mapSy'][sel].mean(axis=2)
-                hp = np.heaviside( Sz, 0.5).mean(axis=2)              # (s, T) upper adiabat
-                hm = np.heaviside(-Sz, 0.5).mean(axis=2)              # (s, T) lower adiabat
-
-                if jumps:
-                    W  = expand_weights(f, time=time, sel=sel)                      # W^(m)
-                    Wt = expand_weights_t(f, sel=sel, S=(Sx, Sy, Sz.mean(axis=2)))  # W^(m)(t)
-                    n_jumps += int(f['n_weights'][sel].sum() - (hi - lo))  # row 0 is t=0, not a jump
-                else:
-                    W, Wt = _w0(Sz.mean(axis=2), c0)                                # Tjump -> inf
-                dPP = Wt['W_PP'] - W['W_PP']
-                dPC = Wt['W_PC'] - W['W_PC']
-
-                vals = {'Cp': W['W_PP'] * hp, 'Cm': W['W_PP'] * hm,
-                        'Cx': W['W_PC'] * Sx, 'Cy': W['W_PC'] * Sy,
-                        'Mp': dPP * hp,       'Mm': dPP * hm,
-                        'Mx': dPC * Sx,       'My': dPC * Sy}
-                b = block_of[rank[lo:hi]]
-                for k, v in vals.items():
-                    tot[k] += v.sum(axis=0)
-                    np.add.at(blk[k], b, v)
-                tot_w  += W['W_PP'].sum(axis=0)
-                tot_dw += dPP.sum(axis=0)
-        offset += ti.size
-
-    r = {k: tot[k] / n_traj for k in _NAMES}
-    r.update({k + '_SE': block_sem_from_means(blk[k] / block_sizes[:, None], nb) for k in _NAMES})
+    r = {k: tot[i] / n_traj for i, k in enumerate(_NAMES)}
+    r.update({k + '_SE': block_sem_from_means(blk[i] / block_sizes[:, None], nb)
+              for i, k in enumerate(_NAMES)})
     W_mean, dW_mean = tot_w / n_traj, tot_dw / n_traj
     r.update(time=time, n_traj=n_traj, nbds=nbds, nblocks=nb, n_jumps=n_jumps,
-             n_files=len(sources), Tjump=cfg.get('Tjump'), full_jump=cfg.get('full_jump'),
+             n_files=len(plan), Tjump=cfg.get('Tjump'), full_jump=cfg.get('full_jump'),
              jumps=jumps, c0=c0,
              W_mean=W_mean,
              identity_C=float(np.max(np.abs(r['Cp'] + r['Cm'] - W_mean))),
@@ -234,6 +251,12 @@ def _panel(ax, t, r, keys, labels, colors, ylabel):
 
 
 def _plot(out, r, tmax=None):
+    # imported here, not at module level: compute()'s spawned workers import this module, and none
+    # of them plots, so they should not each pay matplotlib's import time
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
     t = r['time']
     if tmax is not None:                         # truncate for plotting only
         msk = t <= tmax
@@ -275,13 +298,16 @@ def _main():
     ap.add_argument('--slab',    type=int, default=5000,
                     help='trajectories read per streaming pass (default 5000; lower it if RAM is tight)')
     ap.add_argument('--out',     default='analyze_data.png', help='output png')
+    ap.add_argument('--ncores',  type=int, default=None,
+                    help='worker processes reading files in parallel (default: $SLURM_CPUS_PER_TASK, '
+                         'else 1); useful with a shard directory, one file is one task')
     ap.add_argument('--c0',      type=float, default=None,
                     help='no-jump runs only: initial sampling factor (1 hemisphere, 2 full sphere); '
                          'default: inferred from S_z(0)')
     a = ap.parse_args()
     path = a.file or ('shards' if os.path.isdir('shards') else 'data.hdf')
 
-    r = compute(path, nblocks=a.nblocks, slab=a.slab, c0=a.c0)
+    r = compute(path, nblocks=a.nblocks, slab=a.slab, c0=a.c0, ncores=a.ncores)
     _plot(a.out, r, tmax=a.tmax)
 
     print(f"[cm] {path}: n_traj={r['n_traj']} from {r['n_files']} file(s), nbds={r['nbds']}, "
