@@ -333,7 +333,7 @@ def compute(path, nblocks=None, fitmin=5.0, fitmax=15.0, beta_ovr=None, epsil_ov
     cache_dir = cache_dir or default_cache_dir(path, version)
     fn = functools.partial(_unit_partial, jumps=jumps, w0_only=w0_only, time=time, prm=prm)
     parts, st = map_cached(fn, units, cache_dir, version, ncores=ncores, refresh=refresh,
-                           use_cache=cache)
+                           use_cache=cache, tag='[p2]')
     n_inprog = sum(not u.complete for u in units)
     print(f'[p2] {len(units)} unit(s) of <= {unit_rows} trajectories: {st["cached"]} from cache, '
           f'{st["computed"] + st["in_progress"]} computed on {ncores} worker(s) ({why})'

@@ -280,7 +280,8 @@ def compute(path, nblocks=None, slab=None, c0=None, ncores=None, unit_rows=1000,
         why = 'given --ncores'
     cache_dir = cache_dir or default_cache_dir(path)
     parts, st = map_cached(functools.partial(_unit_partial, jumps=jumps, time=time), units,
-                           cache_dir, _VERSION, ncores=ncores, refresh=refresh, use_cache=cache)
+                           cache_dir, _VERSION, ncores=ncores, refresh=refresh, use_cache=cache,
+                           tag='[cm]')
     n_inprog = sum(not u.complete for u in units)
     print(f'[cm] {len(units)} unit(s) of <= {unit_rows} trajectories: {st["cached"]} from cache, '
           f'{st["computed"] + st["in_progress"]} computed on {ncores} worker(s) ({why})'
