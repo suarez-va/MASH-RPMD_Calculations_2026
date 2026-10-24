@@ -8,12 +8,13 @@ compiled kernel, cached parallel map-reduce, block errors); only the observables
 
     C_Rg(t) = < W_PP^(m)  h(-R(t))  h(-S_z(t)) >    M_Rg(t) = < [W_PP^(m)(t) - W_PP^(m)]  h(-R(t))  h(-S_z(t)) >
     C_Tg(t) = < W_PP^(m)  h( R(t))  h(-S_z(t)) >    M_Tg(t) = < [W_PP^(m)(t) - W_PP^(m)]  h( R(t))  h(-S_z(t)) >
+    C_Re(t) = < W_PP^(m)  h(-R(t))  h( S_z(t)) >    M_Re(t) = < [W_PP^(m)(t) - W_PP^(m)]  h(-R(t))  h( S_z(t)) >
     C_Te(t) = < W_PP^(m)  h( R(t))  h( S_z(t)) >    M_Te(t) = < [W_PP^(m)(t) - W_PP^(m)]  h( R(t))  h( S_z(t)) >
 
-Reflected (R < 0) on the ground adiabat, transmitted (R > 0) on the ground adiabat, transmitted on
-the excited adiabat.  h is the Heaviside step with h(0) = 1/2, <...> an average over trajectories,
-and m = m(t) = #{ jumps with t_jump <= t } (every jump up to AND INCLUDING t).  Figure: left C_Rg,
-C_Tg, C_Te; right M_Rg, M_Tg, M_Te.
+Reflected (R < 0) / transmitted (R > 0) on the ground (g, S_z < 0) / excited (e, S_z > 0) adiabat.
+h is the Heaviside step with h(0) = 1/2, <...> an average over trajectories, and
+m = m(t) = #{ jumps with t_jump <= t } (every jump up to AND INCLUDING t).  Figure: left the four
+C_c; right the four M_c.
 
 The weights are analyze_data.py's: W_PP^(m) constant between jumps (workflow.expand_weights) and
 W_PP^(m)(t) time-dependent (workflow.expand_weights_t), finished on the fly from the 15-column
@@ -25,17 +26,18 @@ as in plot_rho_movie.py (each bead deposits W h(+-S_z) at its own R), so e.g. C_
 of the movie's rho_-(R,t) over R > 0.  The |S_z(t)| inside W_PP^(m)(t) is the bead mean, as in
 analyze_data.py.  For nbds == 1 (what this tree runs) every bead convention coincides.
 
-Exact identities, checked and reported on the console (h(R) + h(-R) = 1 bead by bead), with C_-, M_-
-analyze_data.py's:
+Exact identities, checked and reported on the console (h(R) + h(-R) = 1 bead by bead), with C_+-,
+M_+- analyze_data.py's:
 
     C_Rg(t) + C_Tg(t) = C_-(t)                  M_Rg(t) + M_Tg(t) = M_-(t)
+    C_Re(t) + C_Te(t) = C_+(t)                  M_Re(t) + M_Te(t) = M_+(t)
 
 --- input, parallelism, cache, error bars, no-jump runs ---------------------------------------------
 
 All exactly as in analyze_data.py: --file takes a shard directory or a data.hdf; the input is cut
 into units of at most --unit-rows trajectories, each reduced by one compiled pass (_accumulate) on
 --ncores workers (default: the CPUs of the SLURM allocation, else 1) and cached in
-<file>_partials/tully_v1/; the SE is over --nblocks contiguous groups of whole units; a run without
+<file>_partials/tully_v2/; the SE is over --nblocks contiguous groups of whole units; a run without
 /weights (an OLD run made without Tjump) is the Tjump -> infinity limit with c0 inferred from
 S_z(0) (--c0 overrides).  Current runs always write /weights, so a jump_index=[] run has one row per
 trajectory, with c0 stored, and goes through the ordinary path.
@@ -59,8 +61,8 @@ from numba import njit
 from workflow import plan_units, map_cached, ncores_source, open_readonly   # cached map-reduce
 
 
-# the six plotted observables, then C_-, M_- for the identity checks
-_NAMES = ('CRg', 'CTg', 'CTe', 'MRg', 'MTg', 'MTe', 'Cm', 'Mm')
+# the eight plotted observables, then C_-, C_+, M_-, M_+ for the identity checks
+_NAMES = ('CRg', 'CTg', 'CRe', 'CTe', 'MRg', 'MTg', 'MRe', 'MTe', 'Cm', 'Cp', 'Mm', 'Mp')
 
 
 def block_sem_from_means(block_means, n_blocks):
@@ -81,7 +83,7 @@ def jump_label(cfg):
 
 
 # Bump whenever the observables or their weights change: every cached partial is then recomputed.
-_VERSION = 'tully_v1'
+_VERSION = 'tully_v2'
 
 
 @njit(cache=True)
@@ -98,10 +100,10 @@ def _accumulate(R, Sz, tab, cnt, time, jumps):
     exactly as analyze_data._accumulate. Without jumps (jumps=False) W_PP = 2|S_z(0)|,
     Wt_PP = 2|S_z(t)| (c0 = 1; compute() rescales by c0). The channel factors are bead means of
     h(+-R_b) h(+-S_z,b); |S_z(t)| in the weights is the bead mean.
-    Returns tot (8, T) in _NAMES order, the number of jumps, and whether every S_z(0) is <= 0 / >= 0.
+    Returns tot (12, T) in _NAMES order, the number of jumps, and whether every S_z(0) is <= 0 / >= 0.
     """
     n, T, nb = Sz.shape
-    tot = np.zeros((8, T))
+    tot = np.zeros((12, T))
     n_jumps = 0
     le0 = True
     ge0 = True
@@ -112,7 +114,7 @@ def _accumulate(R, Sz, tab, cnt, time, jumps):
         m = 0
         W0 = 0.0
         for t in range(T):
-            rg = 0.0; tg = 0.0; te = 0.0; hm = 0.0; sz = 0.0
+            rg = 0.0; tg = 0.0; re = 0.0; te = 0.0; hm = 0.0; hp = 0.0; sz = 0.0
             for b in range(nb):
                 z = Sz[k, t, b]
                 x = R[k, t, b]
@@ -122,10 +124,12 @@ def _accumulate(R, Sz, tab, cnt, time, jumps):
                 hrm = 1.0 if x < 0.0 else (0.5 if x == 0.0 else 0.0)
                 rg += hrm * hzm
                 tg += hrp * hzm
+                re += hrm * hzp
                 te += hrp * hzp
                 hm += hzm
+                hp += hzp
                 sz += z
-            rg /= nb; tg /= nb; te /= nb; hm /= nb; sz /= nb
+            rg /= nb; tg /= nb; re /= nb; te /= nb; hm /= nb; hp /= nb; sz /= nb
             asz = np.abs(sz)
             if t == 0:
                 le0 = le0 and sz <= 0.0
@@ -148,12 +152,16 @@ def _accumulate(R, Sz, tab, cnt, time, jumps):
             dPP = Wt_PP - W_PP
             tot[0, t] += W_PP * rg
             tot[1, t] += W_PP * tg
-            tot[2, t] += W_PP * te
-            tot[3, t] += dPP * rg
-            tot[4, t] += dPP * tg
-            tot[5, t] += dPP * te
-            tot[6, t] += W_PP * hm
-            tot[7, t] += dPP * hm
+            tot[2, t] += W_PP * re
+            tot[3, t] += W_PP * te
+            tot[4, t] += dPP * rg
+            tot[5, t] += dPP * tg
+            tot[6, t] += dPP * re
+            tot[7, t] += dPP * te
+            tot[8, t] += W_PP * hm
+            tot[9, t] += W_PP * hp
+            tot[10, t] += dPP * hm
+            tot[11, t] += dPP * hp
     return tot, n_jumps, le0, ge0
 
 
@@ -270,8 +278,10 @@ def compute(path, nblocks=None, slab=None, c0=None, ncores=None, unit_rows=1000,
              n_files=len({u.file for u in units}), n_units=n_units, cache_stats=st,
              Tjump=cfg.get('Tjump'), jump_label=jump_label(cfg), full_jump=cfg.get('full_jump'),
              jumps=jumps, c0=c0,
-             identity_C=float(np.max(np.abs(r['CRg'] + r['CTg'] - r['Cm']))),
-             identity_M=float(np.max(np.abs(r['MRg'] + r['MTg'] - r['Mm']))))
+             identity_C=float(max(np.max(np.abs(r['CRg'] + r['CTg'] - r['Cm'])),
+                                  np.max(np.abs(r['CRe'] + r['CTe'] - r['Cp'])))),
+             identity_M=float(max(np.max(np.abs(r['MRg'] + r['MTg'] - r['Mm'])),
+                                  np.max(np.abs(r['MRe'] + r['MTe'] - r['Mp'])))))
     return r
 
 
@@ -299,15 +309,17 @@ def _plot(out, r, tmax=None):
         r = {k: (v[msk] if isinstance(v, np.ndarray) and v.shape == msk.shape else v)
              for k, v in r.items()}
 
-    colors = ('C0', 'C2', 'C3')
+    colors = ('C0', 'C2', 'C1', 'C3')
     fig, axs = plt.subplots(1, 2, figsize=(13.0, 5.0))
-    _panel(axs[0], t, r, ('CRg', 'CTg', 'CTe'),
+    _panel(axs[0], t, r, ('CRg', 'CTg', 'CRe', 'CTe'),
            (r'$C_{Rg}(t)=\langle W_{PP}^{(m)}\,h(-R(t))\,h(-S_z(t))\rangle$',
             r'$C_{Tg}(t)=\langle W_{PP}^{(m)}\,h(R(t))\,h(-S_z(t))\rangle$',
+            r'$C_{Re}(t)=\langle W_{PP}^{(m)}\,h(-R(t))\,h(S_z(t))\rangle$',
             r'$C_{Te}(t)=\langle W_{PP}^{(m)}\,h(R(t))\,h(S_z(t))\rangle$'), colors, r'$C(t)$')
-    _panel(axs[1], t, r, ('MRg', 'MTg', 'MTe'),
+    _panel(axs[1], t, r, ('MRg', 'MTg', 'MRe', 'MTe'),
            (r'$M_{Rg}(t)=\langle [W_{PP}^{(m)}(t)-W_{PP}^{(m)}]\,h(-R(t))\,h(-S_z(t))\rangle$',
             r'$M_{Tg}(t)=\langle [W_{PP}^{(m)}(t)-W_{PP}^{(m)}]\,h(R(t))\,h(-S_z(t))\rangle$',
+            r'$M_{Re}(t)=\langle [W_{PP}^{(m)}(t)-W_{PP}^{(m)}]\,h(-R(t))\,h(S_z(t))\rangle$',
             r'$M_{Te}(t)=\langle [W_{PP}^{(m)}(t)-W_{PP}^{(m)}]\,h(R(t))\,h(S_z(t))\rangle$'),
            colors, r'$M(t)$')
 
@@ -320,7 +332,7 @@ def _plot(out, r, tmax=None):
 
 def _main():
     ap = argparse.ArgumentParser(
-        description='Channel-resolved Tully populations C_Rg, C_Tg, C_Te and their time-dependent-'
+        description='Channel-resolved Tully populations C_Rg, C_Tg, C_Re, C_Te and their time-dependent-'
                     'weight corrections M from RP-MASH shards or a data.hdf.')
     ap.add_argument('--file',    default=None,
                     help='a shard directory or a data.hdf (default: shards/ if it exists, else data.hdf)')
@@ -362,13 +374,15 @@ def _main():
         print(f"[tully] no /weights table (old run, {r['jump_label']}): Tjump -> infinity, "
               f"W^(0) only, c0={r['c0']:g}" + (' (from --c0)' if a.c0 is not None else
                                                 ' (inferred from S_z(0))'))
-    for k, name in (('CRg', 'C_Rg'), ('CTg', 'C_Tg'), ('CTe', 'C_Te'), ('Cm', 'C_-'),
-                    ('MRg', 'M_Rg'), ('MTg', 'M_Tg'), ('MTe', 'M_Te'), ('Mm', 'M_-')):
+    for k, name in (('CRg', 'C_Rg'), ('CTg', 'C_Tg'), ('CRe', 'C_Re'), ('CTe', 'C_Te'),
+                    ('Cm', 'C_-'), ('Cp', 'C_+'),
+                    ('MRg', 'M_Rg'), ('MTg', 'M_Tg'), ('MRe', 'M_Re'), ('MTe', 'M_Te'),
+                    ('Mm', 'M_-'), ('Mp', 'M_+')):
         print(f"[tully] {name:4s}(0)={r[k][0]: .6e} +/- {r[k + '_SE'][0]:.3e}   "
               f"{name:4s}(T)={r[k][-1]: .6e} +/- {r[k + '_SE'][-1]:.3e}")
-    print(f"[tully] identities: max|C_Rg + C_Tg - C_-| = {r['identity_C']:.3e}   "
-          f"max|M_Rg + M_Tg - M_-| = {r['identity_M']:.3e}")
-    if max(r['identity_C'], r['identity_M']) > 1e-10 * max(1.0, np.abs(r['Cm']).max()):
+    print(f"[tully] identities: max|C_Rg + C_Tg - C_-|, |C_Re + C_Te - C_+| = {r['identity_C']:.3e}   "
+          f"M likewise = {r['identity_M']:.3e}")
+    if max(r['identity_C'], r['identity_M']) > 1e-10 * max(1.0, np.abs(r['Cm']).max(), np.abs(r['Cp']).max()):
         print('[tully] WARNING: an identity is violated beyond round-off. Something is wrong.')
     print(f"[tully] wrote {a.out}")
 
