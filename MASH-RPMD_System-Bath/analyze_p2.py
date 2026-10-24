@@ -50,7 +50,11 @@ W_AB^(m)(t)  time-dependent (as workflow.expand_weights_t), finished here from w
 
              dot_m = Sx^(m-1)(t_m) Sx^(m)(t_m) + Sy^(m-1)(t_m) Sy^(m)(t_m),
              fac_m = 1 + sgn(Sz^(m-1)(t_m) Sz^(m)(t_m)), both fixed at the jump, so t enters only
-             through |Sz(t)|.  Since W^(0)(0) = W^(0), M_2(0) = 0 -- up to ~1e-10, because W^(0)(0)
+             through |Sz(t)|.  A full_jump=False run (hemisphere jumps) uses the same rule with
+             dot_m = 0, just as mash_rpmd does for its constant weights:
+                         W_AP^(m)(t) = |Sz(t)| fac_m W_AP^(m-1)(t_m),  W_AC^(m)(t) = fac_m W_AP^(m-1)(t_m)
+             A full_jump=False run made before mash_rpmd logged S^(m-1)(t_m) and W^(m-1)(t_m) for
+             it has NaN there: fine without jumps (or with --w0-only), an error with them.  Since W^(0)(0) = W^(0), M_2(0) = 0 -- up to ~1e-10, because W^(0)(0)
              is built from mapSz.dat and W^(0) from weights.dat, each rounded to 8 digits.
 
 Beads: K, D at the centroid Rbar; Sx the bead mean; sgn(Sz) the bead mean of sign(Sz); the |Sz(t)|
@@ -154,7 +158,7 @@ def block_sem_from_means(block_means, n_blocks):
 
 
 @njit(cache=True)
-def _accumulate(R, Sz, Sx, tab, cnt, time, prm):
+def _accumulate(R, Sz, Sx, tab, cnt, time, prm, full):
     """
     The partial sums of one unit of trajectories, in one compiled pass over trajectories x times
     (no dense weight arrays). Per trajectory k and time t, with m = #{jumps with t_jump <= t}
@@ -164,6 +168,7 @@ def _accumulate(R, Sz, Sx, tab, cnt, time, prm):
         m = 0:  Wt = (W_CP^(0) |Sz(t)|, W_CP^(0), W_PC^(0), W_CC^(0))              (expand_weights_t)
         m > 0:  dot = Sx_post Sx_prev + Sy_post Sy_prev,   fac = 1 + sgn(Sz_n Sz_prev)
                 Wt_AP = dot W_AC_t + |Sz(t)| fac W_AP_t,   Wt_AC = 3/2 dot W_AC_t + fac W_AP_t
+                (full = False, i.e. a full_jump=False run: dot = 0)
 
     in the operation order of workflow.consolidate._full_jump_recursion. A no-jump run comes in
     with a synthetic row 0 and cnt = 1, --w0-only with the real table and cnt = 1: either way m
@@ -211,7 +216,7 @@ def _accumulate(R, Sz, Sx, tab, cnt, time, prm):
                 Wt_PC = tab[k, 0, 4]
                 Wt_CC = tab[k, 0, 5]
             else:
-                dot = tab[k, m, 13] * tab[k, m, 6] + tab[k, m, 14] * tab[k, m, 7]
+                dot = (tab[k, m, 13] * tab[k, m, 6] + tab[k, m, 14] * tab[k, m, 7]) if full else 0.0
                 fac = 1.0 + np.sign(tab[k, m, 1] * tab[k, m, 8])
                 Wt_PP = dot * tab[k, m, 11] + asz * fac * tab[k, m, 9]
                 Wt_CP = dot * tab[k, m, 12] + asz * fac * tab[k, m, 10]
@@ -229,7 +234,7 @@ def _accumulate(R, Sz, Sx, tab, cnt, time, prm):
     return tot, n_jumps, le0, ge0
 
 
-def _unit_partial(path, lo, hi, jumps, w0_only, time, prm):
+def _unit_partial(path, lo, hi, jumps, w0_only, time, prm, full=True):
     """
     MAP step, run in a worker: the partial sums of rows lo..hi of one file (a shard or a data.hdf).
     workflow.map_cached caches the result per unit, so a unit is reduced once.
@@ -254,15 +259,19 @@ def _unit_partial(path, lo, hi, jumps, w0_only, time, prm):
         cnt = np.ones(hi - lo, dtype=np.int64)
     elif w0_only:
         cnt = np.ones(hi - lo, dtype=np.int64)         # never leave segment 0
-    tot, n_jumps, le0, ge0 = _accumulate(R, Sz, Sx, tab, cnt, time, prm)
+    elif not full and any(np.isnan(tab[k, 1:cnt[k], 6:13]).any() for k in range(hi - lo)):
+        raise ValueError(f'{path}: /weights has NaN in S^(m-1)(t_m) / W^(m-1)(t_m) of a jump row. '
+                         f'This full_jump=False run was made before RP_MASH wrote its time-dependent '
+                         f'weights; re-run it (or pass --w0-only).')
+    tot, n_jumps, le0, ge0 = _accumulate(R, Sz, Sx, tab, cnt, time, prm, full)
     return dict(n=np.int64(hi - lo), tot=tot, n_jumps=np.int64(n_jumps),
                 sz0_le0=np.bool_(le0), sz0_ge0=np.bool_(ge0))
 
 
-def _version(prm, w0_only):
+def _version(prm, w0_only, full=True):
     """_VERSION plus everything else the partials depend on, so variants never share a cache."""
     tag = '_'.join(f'{x:.12g}' for x in prm)
-    return f"{_VERSION}_{'w0' if w0_only else 'w'}_{tag}"
+    return f"{_VERSION}_{'w0' if w0_only else 'w'}_{tag}" + ('' if full else '_fj0')
 
 
 def default_cache_dir(path, version):
@@ -314,8 +323,7 @@ def compute(path, nblocks=None, fitmin=5.0, fitmax=15.0, beta_ovr=None, epsil_ov
             raise KeyError(f"{units[0].file} has a {f['weights'].shape[2]}-column /weights table, "
                            f"expected 15. The run predates the corrected time-dependent weights; "
                            f"re-run it.")
-    if jumps and not cfg.get('full_jump', True):
-        raise ValueError('the time-dependent weights are only defined for full_jump=True runs')
+    full = bool(cfg.get('full_jump', True))      # False: hemisphere jumps, dot = 0 in W^(m)(t)
 
     kvec  = float(cfg['kvec']); epsil = float(cfg['epsil'])
     lbd   = float(cfg['lbd']);  delta = float(cfg['delta'])
@@ -329,9 +337,10 @@ def compute(path, nblocks=None, fitmin=5.0, fitmax=15.0, beta_ovr=None, epsil_ov
         ncores, why = ncores_source()
     else:
         why = 'given --ncores'
-    version = _version(prm, w0_only)
+    version = _version(prm, w0_only, full)
     cache_dir = cache_dir or default_cache_dir(path, version)
-    fn = functools.partial(_unit_partial, jumps=jumps, w0_only=w0_only, time=time, prm=prm)
+    fn = functools.partial(_unit_partial, jumps=jumps, w0_only=w0_only, time=time, prm=prm,
+                           full=full)
     parts, st = map_cached(fn, units, cache_dir, version, ncores=ncores, refresh=refresh,
                            use_cache=cache, tag='[p2]')
     n_inprog = sum(not u.complete for u in units)
@@ -434,7 +443,7 @@ def compute(path, nblocks=None, fitmin=5.0, fitmax=15.0, beta_ovr=None, epsil_ov
                 n_nonphys=n_nonphys, n_skipped=n_skipped,
                 P2eq=P2eq, beta=beta, n_traj=n_traj, nbds=nbds, nblocks=nb,
                 n_files=len({u.file for u in units}), n_units=n_units, cache_stats=st,
-                n_jumps=n_jumps, jumps=jumps, c0=c0, Tjump=cfg.get('Tjump'),
+                n_jumps=n_jumps, jumps=jumps, c0=c0, full_jump=full, Tjump=cfg.get('Tjump'),
                 fitmin=fitmin, fitmax=fitmax, w0_only=w0_only,
                 params=dict(kvec=kvec, epsil=epsil, lbd=lbd, delta=delta))
 
@@ -600,7 +609,7 @@ def _main():
     print(f"[p2] {path}: n_traj={r['n_traj']} from {r['n_files']} file(s) / {r['n_units']} unit(s), "
           f"nbds={r['nbds']}, nblocks={r['nblocks']}" + ("  [W^(0) ONLY]" if r['w0_only'] else ""))
     if r['jumps']:
-        print(f"[p2] Tjump={r['Tjump']}  total jumps across all trajectories: {r['n_jumps']}")
+        print(f"[p2] Tjump={r['Tjump']} full_jump={r['full_jump']}  total jumps across all trajectories: {r['n_jumps']}")
     else:
         print(f"[p2] no /weights table (Tjump={r['Tjump']}): analysed as Tjump -> infinity, "
               f"W^(0) only, c0={r['c0']:g}" + (' (from --c0)' if a.c0 is not None else
