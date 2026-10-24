@@ -56,6 +56,6 @@ CONFIG = {
     'intype'    : 'spin_magnus_adaptive',
 
     # ----------------------------------------------------------------- quantum jumps
-    # Tjump itself is per scan point: Tjump_scan in each config_scan.py, paired with the scan list.
+    # jump_index (the production step indices of the jumps) is set in each config_scan.py.
     'full_jump' : True,
 }

@@ -28,7 +28,8 @@ In MASH sgn(S_z) selects the active adiabat, so rho_+ is the upper surface and r
 traj.py starts every trajectory on the lower adiabat via init_map_spin(0), so rho_+ is identically
 zero until the packet reaches the crossing.
 
-A run made without Tjump has no /weights table and is analysed, as in analyze_data.py, as the
+Current runs always write /weights (a jump_index=[] run has one row per trajectory, c0 stored).
+An OLD run made without Tjump has no /weights table and is analysed, as in analyze_data.py, as the
 Tjump -> infinity limit W_PP = c0 2|S_z(0)| (|bead-mean S_z(0)|), with c0 inferred from S_z(0) (all on
 one side of the equator -> hemisphere sample, c0 = 1, which is Tully's init_map_spin(0); otherwise
 the full sphere, c0 = 2), or given with --c0.  --w0-only ignores the jumps of a jump run the same way
@@ -77,6 +78,16 @@ FPS      =  30
 
 # Bump whenever the estimator changes: every cached partial is then recomputed.
 _VERSION = 'rho_v1'
+
+
+def jump_label(cfg):
+    """'jump_index=[...]' for current runs, 'Tjump=...' for old ones: titles and console lines."""
+    if 'jump_index' in cfg:
+        ji = list(cfg['jump_index'])
+        if len(ji) > 6:
+            return f'jump_index=[{ji[0]}, {ji[1]}, ..., {ji[-1]}] ({len(ji)} jumps)'
+        return f'jump_index={ji}'
+    return f"Tjump={cfg.get('Tjump')}"
 
 
 def frame_indices(T, n_frames):
@@ -240,7 +251,7 @@ def accumulate(path, rmin=R_MIN, rmax=R_MAX, bins=N_BINS, n_frames=N_FRAMES, sla
     return dict(edges=edges, centers=centers, dR=dR, tframes=tframes,
                 rho_p=rho_p, rho_m=rho_m, c_p=c_p, c_m=c_m, in_p=in_p, in_m=in_m,
                 n_traj=n_traj, nbds=nbds, n_jumps=n_jumps, jumps=jumps, c0=c0, w0_only=w0_only,
-                Tjump=cfg.get('Tjump'), rmin=rmin, rmax=rmax, bins=bins)
+                Tjump=cfg.get('Tjump'), jump_label=jump_label(cfg), rmin=rmin, rmax=rmax, bins=bins)
 
 
 def animate(out, r, fps=FPS):
@@ -339,9 +350,9 @@ def _main():
           f"grid {r['bins']} bins over [{r['rmin']:g}, {r['rmax']:g}] (dR={r['dR']:.4f})"
           + ("  [W^(0) ONLY]" if r['w0_only'] else ""))
     if r['jumps']:
-        print(f"[movie] Tjump={r['Tjump']}  total jumps across all trajectories: {r['n_jumps']}")
+        print(f"[movie] {r['jump_label']}  total jumps across all trajectories: {r['n_jumps']}")
     else:
-        print(f"[movie] no /weights table (Tjump={r['Tjump']}): analysed as Tjump -> infinity, "
+        print(f"[movie] no /weights table (old run, {r['jump_label']}): Tjump -> infinity, "
               f"W_PP = c0 2|S_z(0)|, c0={r['c0']:g}" + (' (from --c0)' if a.c0 is not None else
                                                          ' (inferred from S_z(0))'))
     print(f"[movie] c_+ : {r['c_p'][0]:.4f} -> {r['c_p'][-1]:.4f}    "

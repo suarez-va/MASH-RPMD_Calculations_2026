@@ -15,7 +15,7 @@ Per trajectory idx (one call of run_trajectory):
      exactly the old traj.py, restarted from memory instead of from a therm shard.
 
 workflow.shards sees scan_points() and stores point <name> of trajectory idx as a row of
-<run_dir>/<name>/shards/shard_<s>.hdf, with the point's own config (epsil, delta, Tjump) in the
+<run_dir>/<name>/shards/shard_<s>.hdf, with the point's own config (epsil, delta) in the
 shard's config_json.  So <run_dir>/epsil_3.0/shards/ is an ordinary shard directory, and the
 analysis runs inside it unchanged:
 
@@ -23,8 +23,9 @@ analysis runs inside it unchanged:
 
 --- the scan --------------------------------------------------------------------------------------
 
-The config has exactly one scan list, epsil_scan or delta_scan, and Tjump_scan pairs ONE-TO-ONE
-with it (same length; Tjump_scan[i] is used with the i-th value; None = no quantum jumps).  The
+The config has exactly one scan list, epsil_scan or delta_scan.  The quantum jumps are the same at
+every point: `jump_index`, the production step indices k at which a jump fires (at t = k*delt from
+the start of production; [] = no jumps).  weights.dat is written either way.  The
 parameter that is not scanned is the fixed config value (`delta` in an Epsilon-Scan, `epsil` in a
 Delta-Scan).  Point directories:
 
@@ -36,7 +37,7 @@ A one-element list is a one-point scan, and works the same way.
 --- random numbers ---------------------------------------------------------------------------------
 
 The trajectory seed is split into a thermalization stream and a production stream.  The production
-stream is the SAME at every scan point (same initial spin sample and same jump times), as in the old
+stream is the SAME at every scan point (same initial spin sample and same jump resamples), as in the old
 workflow, where every epsil_* directory used the same seed for trajectory k: correlated sampling
 across the scan, so differences between points are less noisy.  base_seed=None still draws the
 production seed once per trajectory and shares it across the points.
@@ -64,8 +65,12 @@ def _point_name(key, value):
 def scan_points(cfg):
     """
     workflow.shards hook: [(directory name, config overrides)] for every scan point, in list order.
-    Exactly one of epsil_scan / delta_scan, with Tjump_scan of the same length.
+    Exactly one of epsil_scan / delta_scan; the jumps (jump_index) are shared by every point.
     """
+    stale = [k for k in ('Tjump_scan', 'Tjump') if k in cfg]
+    if stale:
+        raise KeyError(f'{stale} are no longer used: quantum jumps now fire at the predetermined '
+                       f'production steps in `jump_index` (e.g. [] or [100, 200]), shared by every point')
     keys = [k for k in ('epsil', 'delta') if f'{k}_scan' in cfg]
     if len(keys) != 1:
         raise KeyError(f'the config needs exactly one of epsil_scan / delta_scan, found '
@@ -74,16 +79,12 @@ def scan_points(cfg):
     fixed = 'delta' if key == 'epsil' else 'epsil'
     if fixed not in cfg:
         raise KeyError(f'a {key} scan needs a fixed `{fixed}` in the config')
-    values, tjumps = list(cfg[f'{key}_scan']), list(cfg['Tjump_scan'])
-    if not values or len(tjumps) != len(values):
-        raise ValueError(f'Tjump_scan ({len(tjumps)} values) must pair one-to-one with '
-                         f'{key}_scan ({len(values)} values)')
+    values = list(cfg[f'{key}_scan'])
+    if not values:
+        raise ValueError(f'{key}_scan is empty')
     if key == 'delta' and min(values) <= 0.0:
         raise ValueError('delta_scan values must be > 0 (the directories are named by log10)')
-    return [(_point_name(key, v),
-             {key: float(v), fixed: float(cfg[fixed]),
-              'Tjump': None if tj is None else float(tj)})
-            for v, tj in zip(values, tjumps)]
+    return [(_point_name(key, v), {key: float(v), fixed: float(cfg[fixed])}) for v in values]
 
 
 # ------------------------------------------------------------------ thermalization (old therm.py)
@@ -113,14 +114,14 @@ def _sample_nvt(cfg, rng):
     return nucR, nucP
 
 
-def _build(cfg, potparams, nucR, nucP, seed, Tjump=None, **restart):
+def _build(cfg, potparams, nucR, nucP, seed, jump_index=None, **restart):
     return mash_rpmd.mash_rpmd(
         nstates=cfg['nstates'], nnuc=cfg['nnuc'], nbds=cfg['nbds'],
         beta=cfg['beta'], mass=np.asarray(cfg['mass'], float),
         potype='ET_with_bath', potparams=potparams, nucR=nucR, nucP=nucP,
         spinmap_bool=True, centroid_bool=True, bead_bool=False,
         langevin=cfg['langevin'], langevin_params=cfg['langevin_params'],
-        Tjump=Tjump, full_jump=cfg.get('full_jump', True), seed=seed, verbose=False, **restart)
+        jump_index=jump_index, full_jump=cfg.get('full_jump', True), seed=seed, verbose=False, **restart)
 
 
 def thermalize(cfg, seed):
@@ -178,7 +179,7 @@ def run_trajectory(cfg, seed, idx=None, run_dir=None):
             pot = [cfg['kvec'], over['epsil'], cfg['lbd'], over['delta'], bath]
             # fresh copies per point: the integrator rolls memP and the production mutates nucR/nucP
             m = _build(cfg, pot, state['nucR'].copy(), state['nucP'].copy(), prod_seed,
-                       Tjump=over['Tjump'], init_memP=state['memP'].copy(),
+                       jump_index=cfg.get('jump_index', []), init_memP=state['memP'].copy(),
                        init_Ffluci=state['Ffluci'].copy())
             m.init_map_spin(init_state=None)
             m.run_dynamics(Nprod, cfg['Nprint'], cfg['delt'], cfg['intype'],

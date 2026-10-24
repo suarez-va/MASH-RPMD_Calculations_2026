@@ -36,7 +36,9 @@ All exactly as in analyze_data.py: --file takes a shard directory or a data.hdf;
 into units of at most --unit-rows trajectories, each reduced by one compiled pass (_accumulate) on
 --ncores workers (default: the CPUs of the SLURM allocation, else 1) and cached in
 <file>_partials/tully_v1/; the SE is over --nblocks contiguous groups of whole units; a run without
-/weights (Tjump=None) is the Tjump -> infinity limit with c0 inferred from S_z(0) (--c0 overrides).
+/weights (an OLD run made without Tjump) is the Tjump -> infinity limit with c0 inferred from
+S_z(0) (--c0 overrides).  Current runs always write /weights, so a jump_index=[] run has one row per
+trajectory, with c0 stored, and goes through the ordinary path.
 
 Usage (from the run dir, PYTHONPATH=<RP_MASH root>):
     python analyze_tully.py                          # reads shards/ if present, else data.hdf
@@ -66,6 +68,16 @@ def block_sem_from_means(block_means, n_blocks):
     if n_blocks < 2:
         return np.zeros(block_means.shape[1:])
     return block_means.std(axis=0, ddof=1) / np.sqrt(n_blocks)
+
+
+def jump_label(cfg):
+    """'jump_index=[...]' for current runs, 'Tjump=...' for old ones: titles and console lines."""
+    if 'jump_index' in cfg:
+        ji = list(cfg['jump_index'])
+        if len(ji) > 6:
+            return f'jump_index=[{ji[0]}, {ji[1]}, ..., {ji[-1]}] ({len(ji)} jumps)'
+        return f'jump_index={ji}'
+    return f"Tjump={cfg.get('Tjump')}"
 
 
 # Bump whenever the observables or their weights change: every cached partial is then recomputed.
@@ -256,7 +268,8 @@ def compute(path, nblocks=None, slab=None, c0=None, ncores=None, unit_rows=1000,
               for i, k in enumerate(_NAMES)})
     r.update(time=time, n_traj=n_traj, nbds=nbds, nblocks=nb, n_jumps=n_jumps,
              n_files=len({u.file for u in units}), n_units=n_units, cache_stats=st,
-             Tjump=cfg.get('Tjump'), full_jump=cfg.get('full_jump'), jumps=jumps, c0=c0,
+             Tjump=cfg.get('Tjump'), jump_label=jump_label(cfg), full_jump=cfg.get('full_jump'),
+             jumps=jumps, c0=c0,
              identity_C=float(np.max(np.abs(r['CRg'] + r['CTg'] - r['Cm']))),
              identity_M=float(np.max(np.abs(r['MRg'] + r['MTg'] - r['Mm']))))
     return r
@@ -299,7 +312,7 @@ def _plot(out, r, tmax=None):
            colors, r'$M(t)$')
 
     fig.suptitle(f"n_traj={r['n_traj']}, nbds={r['nbds']}, nblocks={r['nblocks']}, "
-                 f"Tjump={r['Tjump']}", fontsize=12)
+                 f"{r['jump_label']}", fontsize=12)
     fig.tight_layout()
     fig.savefig(out, dpi=200)
     plt.close(fig)
@@ -343,10 +356,10 @@ def _main():
     print(f"[tully] {path}: n_traj={r['n_traj']} from {r['n_files']} file(s) / {r['n_units']} "
           f"unit(s), nbds={r['nbds']}, nblocks={r['nblocks']}")
     if r['jumps']:
-        print(f"[tully] Tjump={r['Tjump']} full_jump={r['full_jump']}  "
+        print(f"[tully] {r['jump_label']} full_jump={r['full_jump']}  "
               f"total jumps across all trajectories: {r['n_jumps']}")
     else:
-        print(f"[tully] no /weights table (Tjump={r['Tjump']}): analysed as Tjump -> infinity, "
+        print(f"[tully] no /weights table (old run, {r['jump_label']}): Tjump -> infinity, "
               f"W^(0) only, c0={r['c0']:g}" + (' (from --c0)' if a.c0 is not None else
                                                 ' (inferred from S_z(0))'))
     for k, name in (('CRg', 'C_Rg'), ('CTg', 'C_Tg'), ('CTe', 'C_Te'), ('Cm', 'C_-'),

@@ -92,10 +92,12 @@ per worker.
 A jump run needs full_jump=True and the 15-column /weights table (older 13-column runs used the
 superseded definition with dot and sgn taken at t, and are refused).
 
---- no-jump runs (Tjump=None) ----------------------------------------------------------------------
+--- no-jump runs ----------------------------------------------------------------------------------
 
-mash_rpmd writes no weights.dat without Tjump, so there is no /weights table.  Such a run is analysed
-as the Tjump -> infinity limit: no jump ever fires, so every t is in segment 0 and
+mash_rpmd now writes weights.dat for every run, so a run with jump_index=[] has a one-row /weights
+table per trajectory (row 0 = c0 (2|S_z(0)|, 2, 2, 3), c0 stored) and goes through the ordinary path.
+Only OLD runs made without Tjump lack /weights.  Such a run is analysed as the Tjump -> infinity
+limit: no jump ever fires, so every t is in segment 0 and
 
     W^(0)    = c0 (2|S_z(0)|, 2, 2, 3)          W^(0)(t) = c0 (2|S_z(t)|, 2, 2, 3)
 
@@ -133,6 +135,16 @@ def block_sem_from_means(block_means, n_blocks):
     if n_blocks < 2:
         return np.zeros(block_means.shape[1:])
     return block_means.std(axis=0, ddof=1) / np.sqrt(n_blocks)
+
+
+def jump_label(cfg):
+    """'jump_index=[...]' for current runs, 'Tjump=...' for old ones: titles and console lines."""
+    if 'jump_index' in cfg:
+        ji = list(cfg['jump_index'])
+        if len(ji) > 6:
+            return f'jump_index=[{ji[0]}, {ji[1]}, ..., {ji[-1]}] ({len(ji)} jumps)'
+        return f'jump_index={ji}'
+    return f"Tjump={cfg.get('Tjump')}"
 
 
 # Bump whenever the observables or their weights change: every cached partial is then recomputed.
@@ -333,7 +345,8 @@ def compute(path, nblocks=None, slab=None, c0=None, ncores=None, unit_rows=1000,
     W_mean, dW_mean = tot_w / n_traj, tot_dw / n_traj
     r.update(time=time, n_traj=n_traj, nbds=nbds, nblocks=nb, n_jumps=n_jumps,
              n_files=len({u.file for u in units}), n_units=n_units, cache_stats=st,
-             Tjump=cfg.get('Tjump'), full_jump=cfg.get('full_jump'), jumps=jumps, c0=c0,
+             Tjump=cfg.get('Tjump'), jump_label=jump_label(cfg), full_jump=cfg.get('full_jump'),
+             jumps=jumps, c0=c0,
              W_mean=W_mean,
              identity_C=float(np.max(np.abs(r['Cp'] + r['Cm'] - W_mean))),
              identity_M=float(np.max(np.abs(r['Mp'] + r['Mm'] - dW_mean))))
@@ -381,7 +394,7 @@ def _plot(out, r, tmax=None):
            r'$M_{x,y}(t)$')
 
     fig.suptitle(f"n_traj={r['n_traj']}, nbds={r['nbds']}, nblocks={r['nblocks']}, "
-                 f"Tjump={r['Tjump']}", fontsize=12)
+                 f"{r['jump_label']}", fontsize=12)
     fig.tight_layout()
     fig.savefig(out, dpi=200)
     plt.close(fig)
@@ -425,10 +438,10 @@ def _main():
     print(f"[cm] {path}: n_traj={r['n_traj']} from {r['n_files']} file(s) / {r['n_units']} unit(s), "
           f"nbds={r['nbds']}, nblocks={r['nblocks']}")
     if r['jumps']:
-        print(f"[cm] Tjump={r['Tjump']} full_jump={r['full_jump']}  "
+        print(f"[cm] {r['jump_label']} full_jump={r['full_jump']}  "
               f"total jumps across all trajectories: {r['n_jumps']}")
     else:
-        print(f"[cm] no /weights table (Tjump={r['Tjump']}): analysed as Tjump -> infinity, "
+        print(f"[cm] no /weights table (old run, {r['jump_label']}): Tjump -> infinity, "
               f"W^(0) only, c0={r['c0']:g}" + (' (from --c0)' if a.c0 is not None else
                                                 ' (inferred from S_z(0))'))
     for k, name in (('Cp', 'C_+'), ('Cm', 'C_-'), ('Cx', 'C_x'), ('Cy', 'C_y'),

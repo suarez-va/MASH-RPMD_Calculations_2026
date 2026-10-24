@@ -8,8 +8,9 @@ sample a Gaussian wavepacket of width `ga`; here every trajectory, and every bea
     nucR = nucR_init        nucP = nucP_init
 
 so there is no `ga` and no initial-condition random draw.  The trajectories differ only through the
-sampled initial spin (init_map_spin(0): lower hemisphere) and the quantum-jump times, both drawn
-inside mash_rpmd from the dynamics seed.
+sampled initial spin (init_map_spin(0): lower hemisphere) and the spin resampled at each quantum
+jump, both drawn inside mash_rpmd from the dynamics seed.  The jumps themselves happen at the
+predetermined step indices `jump_index` (k -> t = k*delt; [] = none), the same for every trajectory.
 
 There is no thermalization stage and no thermostat: a Tully scattering problem has no equilibrium
 ensemble to generate, so the initial state is set right here and propagated microcanonically.
@@ -33,7 +34,7 @@ def _seeds(seed):
     Split the one trajectory seed into (initial conditions, dynamics), exactly as in
     MASH-RPMD_Tully/traj.py.  The initial-condition half is unused here (the initial state is
     deterministic), but keeping the same split means a given `base_seed` gives trajectory k the SAME
-    spin/jump streams as the Gaussian-wavepacket run: correlated sampling between the two workflows.
+    spin samples as the Gaussian-wavepacket run: correlated sampling between the two workflows.
     seed=None -> OS entropy.
     """
     if seed is None:
@@ -63,7 +64,7 @@ def run_trajectory(cfg, seed):
         beta=cfg['beta'], mass=np.asarray(cfg['mass'], float),
         potype='tully_1ac', potparams=potparams, nucR=nucR, nucP=nucP,
         spinmap_bool=True, centroid_bool=True, bead_bool=False,
-        Tjump=cfg['Tjump'], full_jump=cfg['full_jump'], seed=dyn_seed)
+        jump_index=cfg.get('jump_index', []), full_jump=cfg['full_jump'], seed=dyn_seed)
 
     # init_state=0 -> cos(theta) drawn from (-1, 0): the particle starts on the LOWER adiabat,
     # matching run_mashrpmd.py.  (System-Bath uses init_state=None because it samples the whole

@@ -2,8 +2,8 @@
 config_scan.py -- level 3: the diabatic-coupling scan of the High-Friction regime.
 
 Inherits ../config_friction.py (and through it ../../config_base.py) and lists the delta values
-to scan.  `delta_scan` is always a list, even for a single point, and `Tjump_scan` pairs with
-it one-to-one (Tjump_scan[i] is used at delta_scan[i]).  `epsil` is held fixed.
+to scan.  `delta_scan` is always a list, even for a single point.  `jump_index` (the production
+step indices at which quantum jumps fire; [] = none) is shared by every scan point.  `epsil` is held fixed.
 """
 
 import os
@@ -25,7 +25,7 @@ CONFIG = _inherit('../config_friction.py')
 
 CONFIG.update({
     'delta_scan' : [10**(-1.4)],
-    'Tjump_scan' : [45.0],                # one per delta; None = no jumps
+    'jump_index' : [],                  # k -> jump at t = k*delt of production; [] = no jumps
 
     # the parameter this scan holds fixed
     'epsil'      : 0.00,

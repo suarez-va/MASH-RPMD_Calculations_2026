@@ -85,6 +85,8 @@ CONFIG = {
     'Nprint'    : 5,
 
     # ----------------------------------------------------------------- quantum jumps
-    'Tjump'     : 1050.0,
+    # Predetermined jump step indices: k jumps after k steps, at t = k*delt (1 <= k <= traj_time/delt).
+    # [] = no jumps; weights.dat (row 0 = the initial-sample weights) is written either way.
+    'jump_index': [],
     'full_jump' : True,
 }

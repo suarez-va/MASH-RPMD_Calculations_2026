@@ -2,8 +2,8 @@
 config_scan.py -- level 3: the driving-force scan of the Low-Friction regime.
 
 Inherits ../config_friction.py (and through it ../../config_base.py) and lists the epsil values
-to scan.  `epsil_scan` is always a list, even for a single point, and `Tjump_scan` pairs with
-it one-to-one (Tjump_scan[i] is used at epsil_scan[i]).  `delta` is held fixed.
+to scan.  `epsil_scan` is always a list, even for a single point.  `jump_index` (the production
+step indices at which quantum jumps fire; [] = none) is shared by every scan point.  `delta` is held fixed.
 """
 
 import os
@@ -25,7 +25,7 @@ CONFIG = _inherit('../config_friction.py')
 
 CONFIG.update({
     'epsil_scan' : [0.00, 3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0, 24.0, 27.0, 30.0],
-    'Tjump_scan' : [45.0, 45.0, 45.0, 45.0, 45.0, 45.0, 45.0, 45.0, 45.0, 45.0, 45.0],   # one per epsil; None = no jumps
+    'jump_index' : [],                  # k -> jump at t = k*delt of production; [] = no jumps
 
     # the parameter this scan holds fixed
     'delta'      : 10**(-1.4),

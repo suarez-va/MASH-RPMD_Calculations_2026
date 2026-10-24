@@ -74,6 +74,16 @@ import matplotlib.pyplot as plt
 from workflow import open_run, expand_weights   # h5py.File(path,'r'); per-jump -> dense weights
 
 
+def jump_label(cfg):
+    """'jump_index=[...]' for current runs, 'Tjump=...' for old ones: titles and console lines."""
+    if 'jump_index' in cfg:
+        ji = list(cfg['jump_index'])
+        if len(ji) > 6:
+            return f'jump_index=[{ji[0]}, {ji[1]}, ..., {ji[-1]}] ({len(ji)} jumps)'
+        return f'jump_index={ji}'
+    return f"Tjump={cfg.get('Tjump')}"
+
+
 def block_sem_from_means(block_means, n_blocks):
     """SE over trajectories from ALREADY-FORMED block means (same estimator as analyze_p2.py)."""
     if n_blocks < 2:
@@ -91,7 +101,7 @@ def compute(path, nblocks=None, slab=5000, w0_only=False):
         has_w = 'weights' in f
         if not has_w and not w0_only:
             raise KeyError(
-                f"{path} has no /weights dataset. Either the run was made without Tjump, or it was "
+                f"{path} has no /weights dataset. Either it is an old run made without Tjump, or it was "
                 f"consolidated with a version of workflow.consolidate that predates the quantum-jump "
                 f"weights. Re-run `python -m workflow.consolidate --config <config.py>` to pick them "
                 f"up, or pass --w0-only to deliberately analyse the no-jump baseline W^(0).")
@@ -152,7 +162,7 @@ def compute(path, nblocks=None, slab=5000, w0_only=False):
                 W_mean=W_mean, identity_err=identity_err,
                 n_traj=n_traj, nbds=nbds, nblocks=nb, n_jumps=n_jumps,
                 w0_only=w0_only, has_weights=has_w,
-                Tjump=cfg.get('Tjump'), full_jump=cfg.get('full_jump'))
+                Tjump=cfg.get('Tjump'), jump_label=jump_label(cfg), full_jump=cfg.get('full_jump'))
 
 
 def _plot(out, r, tmax=None):
@@ -206,7 +216,7 @@ def _main():
     print(f"[cpm] n_traj={r['n_traj']} nbds={r['nbds']} nblocks={r['nblocks']}"
           + ("  [W^(0) ONLY]" if r['w0_only'] else ""))
     if not r['w0_only']:
-        print(f"[cpm] Tjump={r['Tjump']} full_jump={r['full_jump']}  "
+        print(f"[cpm] {r['jump_label']} full_jump={r['full_jump']}  "
               f"total jumps across all trajectories: {r['n_jumps']}")
         if r['n_jumps'] == 0:
             print(f"[cpm] NOTE: no jumps fired, so W_PP is frozen at its t=0 value 2|Sz(0)| and "
