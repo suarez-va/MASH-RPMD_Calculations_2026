@@ -47,7 +47,8 @@ c0 = 2 for the full-sphere init_map_spin(None) these runs use.  1/4 x c0 = 2 is 
 --- the weights ------------------------------------------------------------------------------------
 
 m = m(t) = #{ jumps with t_jump <= t } (every jump up to AND INCLUDING t, matching mash_rpmd, which
-writes the post-jump state at t_jump).
+writes the post-jump state at t_jump), counted per trajectory from its own /weights row times -- so
+a jump_gap run, whose jumps fire at each trajectory's own times, needs nothing special.
 
 W_AB^(m)     constant between jumps: the /weights row of segment m (as workflow.expand_weights).
 W_AB^(m)(t)  time-dependent (as workflow.expand_weights_t), finished here from what mash_rpmd froze
@@ -162,7 +163,10 @@ _TERMS = ('+P0 W_PP Pt', '-C0 W_CP Pt', '+P0 W_PC Ct', '-C0 W_CC Ct')
 
 
 def jump_label(cfg):
-    """'jump_index=[...]' for current runs, 'Tjump=...' for old ones: titles and console lines."""
+    """'jump_gap=...' (energy trigger) or 'jump_index=[...]' for current runs, 'Tjump=...' for old
+    ones: titles and console lines."""
+    if cfg.get('jump_gap') is not None:
+        return f"jump_gap={float(cfg['jump_gap']):g}"
     if 'jump_index' in cfg:
         ji = list(cfg['jump_index'])
         if len(ji) > 6:
@@ -643,7 +647,8 @@ def _main():
     print(f"[dr] {path}: n_traj={r['n_traj']} from {r['n_files']} file(s) / {r['n_units']} unit(s), "
           f"nbds={r['nbds']}, nblocks={r['nblocks']}" + ("  [W^(0) ONLY]" if r['w0_only'] else ""))
     if r['jumps']:
-        print(f"[dr] {r['jump_label']} full_jump={r['full_jump']}  total jumps across all trajectories: {r['n_jumps']}")
+        print(f"[dr] {r['jump_label']} full_jump={r['full_jump']}  total jumps across all trajectories: "
+              f"{r['n_jumps']} ({r['n_jumps'] / r['n_traj']:.3f} per trajectory)")
     else:
         print(f"[dr] no /weights table (old run, {r['jump_label']}): Tjump -> infinity, "
               f"W^(0) only, c0={r['c0']:g}" + (' (from --c0)' if a.c0 is not None else

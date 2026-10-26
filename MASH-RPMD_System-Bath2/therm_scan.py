@@ -23,11 +23,18 @@ analysis runs inside it unchanged:
 
 --- the scan --------------------------------------------------------------------------------------
 
-The config has exactly one scan list, epsil_scan or delta_scan.  The quantum jumps are the same at
-every point: `jump_index`, the production step indices k at which a jump fires (at t = k*delt from
-the start of production; [] = no jumps).  weights.dat is written either way.  The
-parameter that is not scanned is the fixed config value (`delta` in an Epsilon-Scan, `epsil` in a
-Delta-Scan).  Point directories:
+The config has exactly one scan list, epsil_scan or delta_scan.  The quantum jumps follow the same
+rule at every point, from ONE of two triggers:
+
+    jump_index  the production step indices k at which a jump fires (at t = k*delt from the start of
+                production; [] = no jumps) -- the same times for every trajectory;
+    jump_gap    Egap: each trajectory arms a jump whenever the diabatic gap |V1 - V0| at its centroid
+                drops below Egap and fires it once, on the first step back at |V1 - V0| >= Egap
+                (None = off; needs jump_index = []).  Meant for full_jump=False, whose hemisphere
+                resample is only safe away from the crossing.
+
+weights.dat is written either way.  The parameter that is not scanned is the fixed config value
+(`delta` in an Epsilon-Scan, `epsil` in a Delta-Scan).  Point directories:
 
     epsil_scan -> epsil_<value>          e.g. epsil_0.0, epsil_3.0, epsil_12.25
     delta_scan -> delta_1e<log10 value>  e.g. delta_1e-1.40, delta_1e-2.00
@@ -65,13 +72,16 @@ def _point_name(key, value):
 def scan_points(cfg):
     """
     workflow.shards hook: [(directory name, config overrides)] for every scan point, in list order.
-    Exactly one of epsil_scan / delta_scan; the jumps (jump_index) are shared by every point.
+    Exactly one of epsil_scan / delta_scan; the jumps (jump_index or jump_gap) are shared by every point.
     """
     stale = [k for k in ('Tjump_scan', 'Tjump') if k in cfg]
     if stale:
         raise KeyError(f'{stale} are no longer used: quantum jumps now fire at the predetermined '
                        f'production steps in `jump_index` (e.g. [] or [100, 200]), shared by every point')
-    keys = [k for k in ('epsil', 'delta') if f'{k}_scan' in cfg]
+    if cfg.get('jump_gap') is not None and list(cfg.get('jump_index', [])):
+        raise ValueError(f"jump_gap={cfg['jump_gap']} and jump_index={list(cfg['jump_index'])} are two "
+                         f"different jump triggers: set jump_index = [] to use jump_gap")
+    keys =[k for k in ('epsil', 'delta') if f'{k}_scan' in cfg]
     if len(keys) != 1:
         raise KeyError(f'the config needs exactly one of epsil_scan / delta_scan, found '
                        f'{[k + "_scan" for k in keys]}')
@@ -114,14 +124,15 @@ def _sample_nvt(cfg, rng):
     return nucR, nucP
 
 
-def _build(cfg, potparams, nucR, nucP, seed, jump_index=None, **restart):
+def _build(cfg, potparams, nucR, nucP, seed, jump_index=None, jump_gap=None, **restart):
     return mash_rpmd.mash_rpmd(
         nstates=cfg['nstates'], nnuc=cfg['nnuc'], nbds=cfg['nbds'],
         beta=cfg['beta'], mass=np.asarray(cfg['mass'], float),
         potype='ET_with_bath', potparams=potparams, nucR=nucR, nucP=nucP,
         spinmap_bool=True, centroid_bool=True, bead_bool=False,
         langevin=cfg['langevin'], langevin_params=cfg['langevin_params'],
-        jump_index=jump_index, full_jump=cfg.get('full_jump', True), seed=seed, verbose=False, **restart)
+        jump_index=jump_index, full_jump=cfg.get('full_jump', True), jump_gap=jump_gap, seed=seed,
+        verbose=False, **restart)
 
 
 def thermalize(cfg, seed):
@@ -179,7 +190,8 @@ def run_trajectory(cfg, seed, idx=None, run_dir=None):
             pot = [cfg['kvec'], over['epsil'], cfg['lbd'], over['delta'], bath]
             # fresh copies per point: the integrator rolls memP and the production mutates nucR/nucP
             m = _build(cfg, pot, state['nucR'].copy(), state['nucP'].copy(), prod_seed,
-                       jump_index=cfg.get('jump_index', []), init_memP=state['memP'].copy(),
+                       jump_index=cfg.get('jump_index', []), jump_gap=cfg.get('jump_gap'),
+                       init_memP=state['memP'].copy(),
                        init_Ffluci=state['Ffluci'].copy())
             m.init_map_spin(init_state=None)
             m.run_dynamics(Nprod, cfg['Nprint'], cfg['delt'], cfg['intype'],

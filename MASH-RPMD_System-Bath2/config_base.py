@@ -56,6 +56,8 @@ CONFIG = {
     'intype'    : 'spin_magnus_adaptive',
 
     # ----------------------------------------------------------------- quantum jumps
-    # jump_index (the production step indices of the jumps) is set in each config_scan.py.
+    # The jump trigger is set in each config_scan.py: jump_index (fixed production step indices) or
+    # jump_gap (Egap: jump once on leaving |V1 - V0| < Egap, per trajectory -- use it with
+    # full_jump=False, so the hemisphere resample happens away from the crossing).
     'full_jump' : True,
 }
