@@ -5,7 +5,7 @@ Config hierarchy (each level inherits the one above and overrides/adds a few key
 
     ../../../config_base.py      orchestration + shared physics
     ../../config_friction.py     gamma (the friction regime)
-    ../config_scan.py            the scan list (epsil_scan or delta_scan)
+    ../config_scan.py            the scan list (epsil_scan or log10_delta_scan)
     config_method.py             <- you are here: nbds, timings, thermostat
 
 Same values as MASH-RPMD_System-Bath/Low-Friction/MASH-Classical/config_method.py.  The values that
@@ -44,12 +44,12 @@ CONFIG.update({
 
     # ------------------------------------------------------------------ thermalization
     # Modified model params used only while the memory buffer fills and (R,P) relax.
-    'therm_time'  : 1.0,          # a.u. of GLE burn-in; >= a few * Tmem so memP fully fills
-    'therm_delta' : 10**(-7.0),    # ~0 => NAC~0 => spin frozen on the donor during the burn-in
+    'therm_time'  : 15.0,          # a.u. of GLE burn-in; >= a few * Tmem so memP fully fills
+    'therm_log10_delta' : -7.0,    # delta = 10**(-7) ~0 => NAC~0 => spin frozen on the donor during the burn-in
     'therm_epsil' : -100.0,        # driving force during the burn-in
 
     # ------------------------------------------------------------------ production
-    'traj_time' : 15.0,            # a.u.; Nsteps = traj_time / delt
+    'traj_time' : 20.0,            # a.u.; Nsteps = traj_time / delt
     'Nprint'    : 100,
 
     # ------------------------------------------------------------------ thermostat
@@ -57,4 +57,4 @@ CONFIG.update({
 })
 
 # gamma comes from ../../config_friction.py so the friction constant is written down exactly once.
-CONFIG['langevin_params'] = {'gamma': CONFIG['gamma'], 'Tmem': 1.0, 'Tfluc': 16.0}
+CONFIG['langevin_params'] = {'gamma': CONFIG['gamma'], 'Tmem': 15.0, 'Tfluc': 35.0}

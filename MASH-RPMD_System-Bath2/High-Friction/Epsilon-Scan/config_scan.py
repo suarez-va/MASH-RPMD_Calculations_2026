@@ -5,7 +5,8 @@ Inherits ../config_friction.py (and through it ../../config_base.py) and lists t
 to scan.  `epsil_scan` is always a list, even for a single point.  The jumps are shared by every
 scan point and come from ONE trigger: `jump_index` (the production step indices at which quantum
 jumps fire; [] = none) or `jump_gap` (Egap: each trajectory jumps once every time it leaves the
-region |V1 - V0| < Egap -- meant for full_jump=False; None = off).  `delta` is held fixed.
+region |V1 - V0| < Egap -- meant for full_jump=False; None = off).  The coupling is held fixed,
+given as `log10_delta` (delta = 10**log10_delta).
 """
 
 import os
@@ -31,5 +32,5 @@ CONFIG.update({
     'jump_gap'   : None,                # Egap (a.u.): jump once on leaving |V1 - V0| < Egap; None = off, needs jump_index []
 
     # the parameter this scan holds fixed
-    'delta'      : 10**(-1.4),
+    'log10_delta': -1.4,                # delta = 10**(-1.4)
 })

@@ -7,24 +7,31 @@ between the stages, and there is no thermalization bank to keep in sync.
 Per trajectory idx (one call of run_trajectory):
 
   1. sample (R,P) from the NVT distribution and run the GLE with the MODIFIED model parameters
-     (therm_epsil, therm_delta) for therm_time, spin frozen on the donor.  This fills the memory
-     buffer memP and lets (R,P) relax -- exactly the old therm.py;
+     (therm_epsil, delta = 10**therm_log10_delta) for therm_time, spin frozen on the donor.  This
+     fills the memory buffer memP and lets (R,P) relax -- exactly the old therm.py;
   2. for every scan point (name, overrides) from scan_points(cfg): continue that state -- nucR, nucP,
      memP and the cyclically rolled noise Ffluci -- with the point's REAL parameters for traj_time,
      writing the point's .dat files into the subdirectory <name>/ of the trajectory's work dir --
-     exactly the old traj.py, restarted from memory instead of from a therm shard.
+     exactly the old traj.py, restarted from memory instead of from a therm shard (with
+     dynamics='bo', the same production on the lower adiabat only -- see below).
 
 workflow.shards sees scan_points() and stores point <name> of trajectory idx as a row of
 <run_dir>/<name>/shards/shard_<s>.hdf, with the point's own config (epsil, delta) in the
 shard's config_json.  So <run_dir>/epsil_3.0/shards/ is an ordinary shard directory, and the
 analysis runs inside it unchanged:
 
-    cd epsil_3.0 && python ../../../../analyze_p2.py --file shards --ncores 20
+    cd epsil_3.0 && python ../../../../analyze_decoherence_rate.py --file shards --ncores 20
+    cd delta_1e-1.10 && python ../../../../analyze_bo_rate.py --file shards --ncores 20   # a BO run
 
 --- the scan --------------------------------------------------------------------------------------
 
-The config has exactly one scan list, epsil_scan or delta_scan.  The quantum jumps follow the same
-rule at every point, from ONE of two triggers:
+The config has exactly one scan list, epsil_scan or log10_delta_scan.  The diabatic coupling is
+always given as log10: log10_delta_scan, log10_delta (the fixed value of an Epsilon-Scan) and
+therm_log10_delta (the burn-in); the old linear keys delta_scan / delta / therm_delta are refused.
+Every point's config overrides (and so its shards' config_json) still carry the linear epsil and
+delta = 10**log10_delta, plus log10_delta.
+
+The quantum jumps follow the same rule at every point, from ONE of two triggers:
 
     jump_index  the production step indices k at which a jump fires (at t = k*delt from the start of
                 production; [] = no jumps) -- the same times for every trajectory;
@@ -34,12 +41,22 @@ rule at every point, from ONE of two triggers:
                 resample is only safe away from the crossing.
 
 weights.dat is written either way.  The parameter that is not scanned is the fixed config value
-(`delta` in an Epsilon-Scan, `epsil` in a Delta-Scan).  Point directories:
+(`log10_delta` in an Epsilon-Scan, `epsil` in a Delta-Scan).  Point directories:
 
-    epsil_scan -> epsil_<value>          e.g. epsil_0.0, epsil_3.0, epsil_12.25
-    delta_scan -> delta_1e<log10 value>  e.g. delta_1e-1.40, delta_1e-2.00
+    epsil_scan       -> epsil_<value>          e.g. epsil_0.0, epsil_3.0, epsil_12.25
+    log10_delta_scan -> delta_1e<log10 value>  e.g. delta_1e-1.40, delta_1e-1.10, delta_1e0.50
 
 A one-element list is a one-point scan, and works the same way.
+
+--- the dynamics ----------------------------------------------------------------------------------
+
+`dynamics` picks the production method (the thermalization is the same for both):
+
+    'mash'  (default)  RP-MASH: the spin is sampled on the full sphere, with the quantum jumps above;
+    'bo'               Born-Oppenheimer on the LOWER adiabat (RP_MASH bo_rpmd): the spin is held on
+                       the south pole, so the nuclei never leave the lower surface.  No jumps (a BO
+                       config must set jump_index = [] and jump_gap = None); analyse it with
+                       analyze_bo_rate.py, which counts the trajectories past the crossing.
 
 --- random numbers ---------------------------------------------------------------------------------
 
@@ -49,52 +66,77 @@ workflow, where every epsil_* directory used the same seed for trajectory k: cor
 across the scan, so differences between points are less noisy.  base_seed=None still draws the
 production seed once per trajectory and shares it across the points.
 
-Usage (from a MASH-Classical / MASH-Quantum dir, whose config_method.py sets system_file here):
+Usage (from a MASH-Classical / MASH-Quantum / BO-Classical dir, whose config_method.py sets
+system_file here):
     python -m workflow.runner --config config_method.py                    # local
     python -m workflow.slurm  --config config_method.py && sbatch submit_grid.sh
 """
 
 import os
-import math
 
 import numpy as np
 import normal_mode
 import mash_rpmd   # via PYTHONPATH (= RP_MASH root)
+import bo_rpmd
 
 
 # ------------------------------------------------------------------ the scan
+_LINEAR = {'delta_scan': 'log10_delta_scan', 'delta': 'log10_delta', 'therm_delta': 'therm_log10_delta'}
+
+
 def _point_name(key, value):
     if key == 'epsil':
         return f'epsil_{float(value)!r}'
-    return f'delta_1e{math.log10(float(value)):.2f}'
+    return f'delta_1e{float(value):.2f}'
+
+
+def _dynamics(cfg):
+    dyn = cfg.get('dynamics', 'mash')
+    if dyn not in ('mash', 'bo'):
+        raise ValueError(f"dynamics must be 'mash' or 'bo', got {dyn!r}")
+    return dyn
 
 
 def scan_points(cfg):
     """
     workflow.shards hook: [(directory name, config overrides)] for every scan point, in list order.
-    Exactly one of epsil_scan / delta_scan; the jumps (jump_index or jump_gap) are shared by every point.
+    Exactly one of epsil_scan / log10_delta_scan; the jumps (jump_index or jump_gap) are shared by
+    every point.  The overrides hold the linear epsil and delta (plus log10_delta).
     """
     stale = [k for k in ('Tjump_scan', 'Tjump') if k in cfg]
     if stale:
         raise KeyError(f'{stale} are no longer used: quantum jumps now fire at the predetermined '
                        f'production steps in `jump_index` (e.g. [] or [100, 200]), shared by every point')
+    linear = [k for k in _LINEAR if k in cfg]
+    if linear:
+        raise KeyError(f'{linear} are no longer used: the coupling is given as log10, so use '
+                       f'{[_LINEAR[k] for k in linear]} (e.g. log10_delta = -1.4 for delta = 10**(-1.4))')
     if cfg.get('jump_gap') is not None and list(cfg.get('jump_index', [])):
         raise ValueError(f"jump_gap={cfg['jump_gap']} and jump_index={list(cfg['jump_index'])} are two "
                          f"different jump triggers: set jump_index = [] to use jump_gap")
-    keys =[k for k in ('epsil', 'delta') if f'{k}_scan' in cfg]
+    if _dynamics(cfg) == 'bo' and (cfg.get('jump_gap') is not None or list(cfg.get('jump_index', []))):
+        raise ValueError(f"dynamics='bo' has no spin and so no quantum jumps: set jump_index = [] and "
+                         f"jump_gap = None (got {list(cfg.get('jump_index', []))}, {cfg.get('jump_gap')})")
+    keys = [k for k, s in (('epsil', 'epsil_scan'), ('delta', 'log10_delta_scan')) if s in cfg]
     if len(keys) != 1:
-        raise KeyError(f'the config needs exactly one of epsil_scan / delta_scan, found '
-                       f'{[k + "_scan" for k in keys]}')
+        raise KeyError(f'the config needs exactly one of epsil_scan / log10_delta_scan, found '
+                       f'{[k for k in ("epsil_scan", "log10_delta_scan") if k in cfg]}')
     key = keys[0]
-    fixed = 'delta' if key == 'epsil' else 'epsil'
-    if fixed not in cfg:
-        raise KeyError(f'a {key} scan needs a fixed `{fixed}` in the config')
-    values = list(cfg[f'{key}_scan'])
+    if key == 'epsil':
+        if 'log10_delta' not in cfg:
+            raise KeyError('an epsil scan needs a fixed `log10_delta` in the config')
+        values = list(cfg['epsil_scan'])
+        lg = float(cfg['log10_delta'])
+        over = lambda v: {'epsil': float(v), 'delta': 10**lg, 'log10_delta': lg}
+    else:
+        if 'epsil' not in cfg:
+            raise KeyError('a delta scan needs a fixed `epsil` in the config')
+        values = list(cfg['log10_delta_scan'])
+        ep = float(cfg['epsil'])
+        over = lambda v: {'delta': 10**float(v), 'log10_delta': float(v), 'epsil': ep}
     if not values:
-        raise ValueError(f'{key}_scan is empty')
-    if key == 'delta' and min(values) <= 0.0:
-        raise ValueError('delta_scan values must be > 0 (the directories are named by log10)')
-    return [(_point_name(key, v), {key: float(v), fixed: float(cfg[fixed])}) for v in values]
+        raise ValueError(f'{"epsil_scan" if key == "epsil" else "log10_delta_scan"} is empty')
+    return [(_point_name(key, v), over(v)) for v in values]
 
 
 # ------------------------------------------------------------------ thermalization (old therm.py)
@@ -135,13 +177,23 @@ def _build(cfg, potparams, nucR, nucP, seed, jump_index=None, jump_gap=None, **r
         verbose=False, **restart)
 
 
+def _build_bo(cfg, potparams, nucR, nucP, seed, **restart):
+    """The production object of dynamics='bo': the same system on the lower adiabat only."""
+    return bo_rpmd.bo_rpmd(
+        nstates=cfg['nstates'], nnuc=cfg['nnuc'], nbds=cfg['nbds'],
+        beta=cfg['beta'], mass=np.asarray(cfg['mass'], float),
+        potype='ET_with_bath', potparams=potparams, nucR=nucR, nucP=nucP, centroid_bool=True,
+        langevin=cfg['langevin'], langevin_params=cfg['langevin_params'], seed=seed,
+        verbose=False, **restart)
+
+
 def thermalize(cfg, seed):
     """Run the burn-in; return the restart state (nucR, nucP, memP, Ffluci rolled to its end)."""
     nbds = cfg['nbds']; delt = cfg['delt']
     rng = np.random.default_rng(seed)
     nucR, nucP = _sample_nvt(cfg, rng)
 
-    pot_e = [cfg['kvec'], float(cfg['therm_epsil']), cfg['lbd'], float(cfg['therm_delta']),
+    pot_e = [cfg['kvec'], float(cfg['therm_epsil']), cfg['lbd'], 10**float(cfg['therm_log10_delta']),
              np.asarray(cfg['bath'], float)]
     m1 = _build(cfg, pot_e, nucR, nucP, seed)
     m1.mapSx = np.zeros(nbds); m1.mapSy = np.zeros(nbds); m1.mapSz = -np.ones(nbds)   # donor
@@ -182,6 +234,7 @@ def run_trajectory(cfg, seed, idx=None, run_dir=None):
 
     Nprod = round(cfg['traj_time'] / cfg['delt'])
     bath = np.asarray(cfg['bath'], float)
+    bo = _dynamics(cfg) == 'bo'
     home = os.getcwd()
     for name, over in points:
         os.makedirs(name)
@@ -189,11 +242,15 @@ def run_trajectory(cfg, seed, idx=None, run_dir=None):
         try:
             pot = [cfg['kvec'], over['epsil'], cfg['lbd'], over['delta'], bath]
             # fresh copies per point: the integrator rolls memP and the production mutates nucR/nucP
-            m = _build(cfg, pot, state['nucR'].copy(), state['nucP'].copy(), prod_seed,
-                       jump_index=cfg.get('jump_index', []), jump_gap=cfg.get('jump_gap'),
-                       init_memP=state['memP'].copy(),
-                       init_Ffluci=state['Ffluci'].copy())
-            m.init_map_spin(init_state=None)
+            restart = dict(init_memP=state['memP'].copy(), init_Ffluci=state['Ffluci'].copy())
+            if bo:
+                m = _build_bo(cfg, pot, state['nucR'].copy(), state['nucP'].copy(), prod_seed,
+                              **restart)                 # spin on the south pole: no sampling
+            else:
+                m = _build(cfg, pot, state['nucR'].copy(), state['nucP'].copy(), prod_seed,
+                           jump_index=cfg.get('jump_index', []), jump_gap=cfg.get('jump_gap'),
+                           **restart)
+                m.init_map_spin(init_state=None)
             m.run_dynamics(Nprod, cfg['Nprint'], cfg['delt'], cfg['intype'],
                            init_time=0.0, small_dt_ratio=1)
             if os.path.exists('memK.dat'):          # the friction kernel: recomputable, ~MB of text
@@ -211,4 +268,5 @@ def shard_attrs(cfg):
             'Nmem': int(Nmem), 'Nfluc': int(Nfluc), 'period': int(period),
             'Nburn': int(Nburn), 'noise_offset': int(Nburn % period),
             'therm_time': float(cfg['therm_time']), 'therm_epsil': float(cfg['therm_epsil']),
-            'therm_delta': float(cfg['therm_delta'])}
+            'therm_delta': 10**float(cfg['therm_log10_delta']),
+            'therm_log10_delta': float(cfg['therm_log10_delta'])}

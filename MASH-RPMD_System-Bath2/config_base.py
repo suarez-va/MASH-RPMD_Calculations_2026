@@ -8,9 +8,10 @@ Config hierarchy (each level inherits the one above and overrides/adds a few key
       +-- High-Friction/            the other
 
 Put a value HERE if it is the same for both friction regimes, both methods and every epsil point.
-`delta` (the diabatic coupling) and `gamma` (the friction constant) are deliberately NOT here: they
-are set lower in the hierarchy, in each regime's / method's config, which is also where `gamma` has
-to be wired into `langevin_params`.
+The diabatic coupling and `gamma` (the friction constant) are deliberately NOT here: they are set
+lower in the hierarchy -- the coupling in each scan's config_scan.py, always as log10 (log10_delta or
+log10_delta_scan, delta = 10**value; the burn-in's therm_log10_delta in config_method.py), and
+`gamma` in each regime's config_friction.py, wired into `langevin_params` by config_method.py.
 
 SLURM memory is requested per CPU (`mem_per_cpu` -> #SBATCH --mem-per-cpu), so it scales with
 `cpus_per_task` instead of being one total shared by every trajectory a task runs at once.
@@ -18,17 +19,17 @@ SLURM memory is requested per CPU (`mem_per_cpu` -> #SBATCH --mem-per-cpu), so i
 
 CONFIG = {
     # ----------------------------------------------------------------- orchestration (workflow)
-    'n_traj'    : 100000000,      # number of independent trajectories to run
+    'n_traj'    : 10000000,      # number of independent trajectories to run
     'base_seed' : None,        # int -> reproducible; None -> fresh OS entropy each trajectory
     'ncores'    : 1,           # local cores for `python -m workflow.runner`
-    'shard_size': 10000,        # trajectories per shards/shard_<s>.hdf (None -> one dir per trajectory)
+    'shard_size': 1000,        # trajectories per shards/shard_<s>.hdf (None -> one dir per trajectory)
     'shard_dir' : 'shards',    # relative to the run dir; merge with `python -m workflow.shards`
 
     'slurm': {
-        'max_tasks'     : 250,
-        'job_name'      : 'rpmash_grid',
-        'time'          : '24:00:00',
-        'cpus_per_task' : 5,
+        'max_tasks'     : 500,
+        'job_name'      : 'MASHRPMD',
+        'time'          : '29:00:00',
+        'cpus_per_task' : 10,
         'max_concurrent': None,
         'partition'     : None,
         'account'       : 'gts-jkretchmer3-chemx',
@@ -47,7 +48,7 @@ CONFIG = {
     'beta'    : 1.00,
 
     # ----------------------------------------------------------------- Marcus ET model (a.u.)
-    # `epsil` and `delta` are NOT here -- they are set lower in the hierarchy.
+    # `epsil` and the coupling (log10_delta) are NOT here -- they are set lower in the hierarchy.
     'kvec'  : 4.00,
     'lbd'   : 12.00,
     'bath'  : [0, 1.00, 2.00, 2.00],     # [N_bath, mass, gamma, w_b]; N_bath=0 -> no explicit bath
@@ -59,5 +60,5 @@ CONFIG = {
     # The jump trigger is set in each config_scan.py: jump_index (fixed production step indices) or
     # jump_gap (Egap: jump once on leaving |V1 - V0| < Egap, per trajectory -- use it with
     # full_jump=False, so the hemisphere resample happens away from the crossing).
-    'full_jump' : True,
+    'full_jump' : False,
 }

@@ -332,6 +332,41 @@ def line_fit(time, K12, fitmin, fitmax):
     return float(fit.slope), float(fit.intercept), float(fit.rvalue), int(mask.sum())
 
 
+def block_rate(time, blk_P2, P2eq, fitmin, fitmax):
+    """
+    The block analysis of the rate: K12 of every block mean blk_P2[i] and its line fit over
+    [fitmin, fitmax].  m_bar = mean of the finite slopes, sigma_m = their std(ddof=1)/sqrt(count).
+    n_nonphys counts blocks with u = 1 - P2/P2eq <= 0 in the window, n_skipped blocks without a fit.
+    Shared with analyze_bo_rate.py.
+    """
+    win = (time >= fitmin) & (time <= fitmax)
+    K12_blks, blk_m, blk_b = [], [], []
+    n_nonphys, n_skipped = 0, 0
+    for i in range(blk_P2.shape[0]):
+        K12_b, _, u_b = k12_from_p2(blk_P2[i], P2eq)
+        K12_blks.append(K12_b)
+        if np.any(u_b[win] <= 0.0):
+            n_nonphys += 1
+        m_b, b_b, _, _ = line_fit(time, K12_b, fitmin, fitmax)
+        blk_m.append(m_b); blk_b.append(b_b)
+        if not np.isfinite(m_b):
+            n_skipped += 1
+
+    blk_m = np.asarray(blk_m); blk_b = np.asarray(blk_b)
+    good  = np.isfinite(blk_m)
+    slopes, intercepts = blk_m[good], blk_b[good]
+    if slopes.size >= 2:
+        m_bar   = float(slopes.mean())
+        b_bar   = float(intercepts.mean())
+        sigma_m = float(slopes.std(ddof=1) / np.sqrt(slopes.size))
+    elif slopes.size == 1:
+        m_bar, b_bar, sigma_m = float(slopes[0]), float(intercepts[0]), float('nan')
+    else:
+        m_bar = b_bar = sigma_m = float('nan')
+    return dict(K12_blks=K12_blks, slopes=slopes, intercepts=intercepts, blk_m=blk_m, blk_b=blk_b,
+                m_bar=m_bar, b_bar=b_bar, sigma_m=sigma_m, n_nonphys=n_nonphys, n_skipped=n_skipped)
+
+
 def compute(path, nblocks=None, fitmin=5.0, fitmax=15.0, beta_ovr=None, epsil_ovr=None,
             slab=None, w0_only=False, c0=None, ncores=None, unit_rows=1000,
             cache=True, refresh=False, cache_dir=None, ngap=4.0):
@@ -443,38 +478,12 @@ def compute(path, nblocks=None, fitmin=5.0, fitmax=15.0, beta_ovr=None, epsil_ov
     m_full, b_full, r_full, n_full = line_fit(time, K12, fitmin, fitmax)
 
     # ---- per-block K12 and per-block line fits ----
-    win = (time >= fitmin) & (time <= fitmax)
-    K12_blks, blk_m, blk_b = [], [], []
-    n_nonphys, n_skipped = 0, 0
-    for i in range(nb):
-        K12_b, _, u_b = k12_from_p2(blk_P2[i], P2eq)
-        K12_blks.append(K12_b)
-        if np.any(u_b[win] <= 0.0):
-            n_nonphys += 1
-        m_b, b_b, _, _ = line_fit(time, K12_b, fitmin, fitmax)
-        blk_m.append(m_b); blk_b.append(b_b)
-        if not np.isfinite(m_b):
-            n_skipped += 1
-
-    blk_m = np.asarray(blk_m); blk_b = np.asarray(blk_b)
-    good  = np.isfinite(blk_m)
-    slopes, intercepts = blk_m[good], blk_b[good]
-    if slopes.size >= 2:
-        m_bar   = float(slopes.mean())
-        b_bar   = float(intercepts.mean())
-        sigma_m = float(slopes.std(ddof=1) / np.sqrt(slopes.size))
-    elif slopes.size == 1:
-        m_bar, b_bar, sigma_m = float(slopes[0]), float(intercepts[0]), float('nan')
-    else:
-        m_bar = b_bar = sigma_m = float('nan')
+    br = block_rate(time, blk_P2, P2eq, fitmin, fitmax)
 
     return dict(time=time, P2=P2, P2_SE=P2_SE, P2t=P2t, M2=M2, M2_SE=M2_SE,
                 terms=terms, terms_t=terms_t,
-                K12=K12, K12_SE=K12_SE, K12t=K12t, K12_blks=K12_blks, M12=M12, M12_SE=M12_SE,
-                m_full=m_full, b_full=b_full, r_full=r_full, n_full=n_full,
-                slopes=slopes, intercepts=intercepts, blk_m=blk_m, blk_b=blk_b,
-                m_bar=m_bar, b_bar=b_bar, sigma_m=sigma_m,
-                n_nonphys=n_nonphys, n_skipped=n_skipped,
+                K12=K12, K12_SE=K12_SE, K12t=K12t, M12=M12, M12_SE=M12_SE,
+                m_full=m_full, b_full=b_full, r_full=r_full, n_full=n_full, **br,
                 P2eq=P2eq, beta=beta, n_traj=n_traj, nbds=nbds, nblocks=nb,
                 n_files=len({u.file for u in units}), n_units=n_units, cache_stats=st,
                 n_jumps=n_jumps, jumps=jumps, c0=c0, full_jump=full, Tjump=cfg.get('Tjump'),
@@ -510,37 +519,11 @@ def _band(ax, t, y, se, color, label):
     ax.legend(loc='best', frameon=False, fontsize=9)
 
 
-def _plot(out, r, tmax=None):
-    # imported here, not at module level: compute()'s spawned workers import this module, and none
-    # of them plots, so they should not each pay matplotlib's import time
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-
-    t = r['time']
-    K12_blks = r['K12_blks']
-    if tmax is not None:                         # truncate for plotting only (fits already done)
-        msk = t <= tmax
-        t = t[msk]
-        K12_blks = [k[msk] for k in K12_blks]
-        r = {k: (v[msk] if isinstance(v, np.ndarray) and v.shape == msk.shape else v)
-             for k, v in r.items()}
-
+def k12_panel(plt, ak, t, r, K12_blks):
+    """K12 (full average with its SE band, and every block) with the line fits on axes ak, the
+    view clipped to the physical range.  Shared with analyze_bo_rate.py."""
     fmin, fmax = r['fitmin'], r['fitmax']
     tf = np.array([fmin, fmax])
-
-    fig, ax = plt.subplots(2, 2, figsize=(13.0, 9.5), sharex=True)
-
-    # ---------------- top left: P_2 ----------------
-    _band(ax[0, 0], t, r['P2'], r['P2_SE'], 'C0', r'$P_2(t)$')
-    ax[0, 0].set_ylabel(r'$P_2(t)$')
-
-    # ---------------- top right: M_2 ----------------
-    _band(ax[0, 1], t, r['M2'], r['M2_SE'], 'C3', r"$M_2(t)=P_2'(t)-P_2(t)$")
-    ax[0, 1].set_ylabel(r'$M_2(t)$')
-
-    # ---------------- bottom left: K12, full + per-block, with the line fits ----------------
-    ak = ax[1, 0]
     K12, K12_SE = r['K12'], r['K12_SE']
     ak.axvspan(fmin, fmax, color='0.92', zorder=0)
     ak.axhline(0.0, color='0.7', lw=0.8, ls='--')
@@ -580,6 +563,38 @@ def _plot(out, r, tmax=None):
         lo, hi = min(lo, min(ends)), max(hi, max(ends))
     pad = 0.12 * (hi - lo) if hi > lo else 1.0
     ak.set_ylim(lo - pad, hi + pad)
+
+
+def _plot(out, r, tmax=None):
+    # imported here, not at module level: compute()'s spawned workers import this module, and none
+    # of them plots, so they should not each pay matplotlib's import time
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    t = r['time']
+    K12_blks = r['K12_blks']
+    if tmax is not None:                         # truncate for plotting only (fits already done)
+        msk = t <= tmax
+        t = t[msk]
+        K12_blks = [k[msk] for k in K12_blks]
+        r = {k: (v[msk] if isinstance(v, np.ndarray) and v.shape == msk.shape else v)
+             for k, v in r.items()}
+
+    fmin, fmax = r['fitmin'], r['fitmax']
+
+    fig, ax = plt.subplots(2, 2, figsize=(13.0, 9.5), sharex=True)
+
+    # ---------------- top left: P_2 ----------------
+    _band(ax[0, 0], t, r['P2'], r['P2_SE'], 'C0', r'$P_2(t)$')
+    ax[0, 0].set_ylabel(r'$P_2(t)$')
+
+    # ---------------- top right: M_2 ----------------
+    _band(ax[0, 1], t, r['M2'], r['M2_SE'], 'C3', r"$M_2(t)=P_2'(t)-P_2(t)$")
+    ax[0, 1].set_ylabel(r'$M_2(t)$')
+
+    # ---------------- bottom left: K12, full + per-block, with the line fits ----------------
+    k12_panel(plt, ax[1, 0], t, r, K12_blks)
 
     # ---------------- bottom right: M12 ----------------
     _band(ax[1, 1], t, r['M12'], r['M12_SE'], 'C3',
@@ -653,7 +668,7 @@ def _main():
         print(f"[dr] no /weights table (old run, {r['jump_label']}): Tjump -> infinity, "
               f"W^(0) only, c0={r['c0']:g}" + (' (from --c0)' if a.c0 is not None else
                                                 ' (inferred from Sz(0))'))
-    print(f"[dr] params: kvec={p['kvec']} epsil={p['epsil']} lbd={p['lbd']} delta={p['delta']:.6e}")
+    print(f"[dr] params: kvec={p['kvec']} epsil={p['epsil']} lbd={p['lbd']} delta={p['delta']:.6e} (log10 {np.log10(p['delta']):.4g})")
     print(f"[dr] beta={r['beta']:g}  P2eq={r['P2eq']:.6f}")
     print(f"[dr] decoherence cut: ngap={r['ngap']:g}  Rc={r['Rc']:.6g}   fraction of trajectories "
           f"with Rbar > Rc (Ct cut off): t=0 {r['frac_past'][0]:.4f}, t=T {r['frac_past'][-1]:.4f}")

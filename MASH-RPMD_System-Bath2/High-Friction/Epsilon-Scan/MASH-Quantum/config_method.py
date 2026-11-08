@@ -5,7 +5,7 @@ Config hierarchy (each level inherits the one above and overrides/adds a few key
 
     ../../../config_base.py      orchestration + shared physics
     ../../config_friction.py     gamma (the friction regime)
-    ../config_scan.py            the scan list (epsil_scan or delta_scan)
+    ../config_scan.py            the scan list (epsil_scan or log10_delta_scan)
     config_method.py             <- you are here: nbds, timings, thermostat
 
 Same values as MASH-RPMD_System-Bath/Low-Friction/MASH-Quantum/config_method.py.  The values that
@@ -45,7 +45,7 @@ CONFIG.update({
     # ------------------------------------------------------------------ thermalization
     # Modified model params used only while the memory buffer fills and (R,P) relax.
     'therm_time'  : 25.0,          # a.u. of GLE burn-in; >= a few * Tmem so memP fully fills
-    'therm_delta' : 10**(-7.0),    # ~0 => NAC~0 => spin frozen on the donor during the burn-in
+    'therm_log10_delta' : -7.0,    # delta = 10**(-7) ~0 => NAC~0 => spin frozen on the donor during the burn-in
     'therm_epsil' : -100.0,        # driving force during the burn-in
 
     # ------------------------------------------------------------------ production

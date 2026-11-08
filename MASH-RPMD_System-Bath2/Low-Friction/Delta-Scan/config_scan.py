@@ -1,11 +1,14 @@
 """
 config_scan.py -- level 3: the diabatic-coupling scan of the Low-Friction regime.
 
-Inherits ../config_friction.py (and through it ../../config_base.py) and lists the delta values
-to scan.  `delta_scan` is always a list, even for a single point.  The jumps are shared by every
+Inherits ../config_friction.py (and through it ../../config_base.py) and lists the diabatic couplings
+to scan, as log10(delta): `log10_delta_scan` is always a list, even for a single point, and point
+v runs in delta_1e<v>/ with delta = 10**v.  `epsil` is held fixed.  The jumps are shared by every
 scan point and come from ONE trigger: `jump_index` (the production step indices at which quantum
 jumps fire; [] = none) or `jump_gap` (Egap: each trajectory jumps once every time it leaves the
-region |V1 - V0| < Egap -- meant for full_jump=False; None = off).  `epsil` is held fixed.
+region |V1 - V0| < Egap -- meant for full_jump=False; None = off).  This scan uses the energy-gap
+trigger with hemisphere jumps (full_jump=False, jump_gap=5).  BO-Classical/ ignores the jumps (it has
+no spin) and sets them off itself.
 """
 
 import os
@@ -26,9 +29,10 @@ def _inherit(relpath):
 CONFIG = _inherit('../config_friction.py')
 
 CONFIG.update({
-    'delta_scan' : [10**(-1.4)],
+    'log10_delta_scan' : [-1.1, -1.0, -0.9, -0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
+    'full_jump'  : False,               # hemisphere jumps: resample within the current adiabat
     'jump_index' : [],                  # k -> jump at t = k*delt of production; [] = no jumps
-    'jump_gap'   : None,                # Egap (a.u.): jump once on leaving |V1 - V0| < Egap; None = off, needs jump_index []
+    'jump_gap'   : 5.0,                 # Egap (a.u.): jump once on leaving |V1 - V0| < Egap; None = off, needs jump_index []
 
     # the parameter this scan holds fixed
     'epsil'      : 0.00,
