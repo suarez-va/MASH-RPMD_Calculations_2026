@@ -3,7 +3,7 @@ analyze_bo_rate.py -- the acceptor population and rate of a Born-Oppenheimer run
 e.g. Low-Friction/Delta-Scan/BO-Classical): the nuclei never leave the lower adiabat, so there are no
 weights and no spin -- a trajectory is on the acceptor side when its centroid is past the crossing.
 Output is a 1x2 figure (analyze_bo_rate.png): P_2(t) on the left, K_12(t) with its block analysis
-of the rate on the right, built exactly as in analyze_decoherence_rate.py so the two rates compare.
+of the rate on the right, built exactly as in analyze_rate.py so the two rates compare.
 
 --- the observables --------------------------------------------------------------------------------
 
@@ -21,7 +21,7 @@ and the rate is the slope of a least-squares line fit of K_12 over [fitmin, fitm
 --- error bars -------------------------------------------------------------------------------------
 
 The blocks are `nblocks` contiguous groups of whole units (np.array_split over the units, in
-trajectory order), exactly as in analyze_decoherence_rate.py:
+trajectory order), exactly as in analyze_rate.py:
 
     P_2   SE = std of the block means / sqrt(nblocks)
     K_12  SE = SE(P_2) / |u|,  u = 1 - P_2/P2eq
@@ -29,8 +29,8 @@ trajectory order), exactly as in analyze_decoherence_rate.py:
 
 --- how it runs ------------------------------------------------------------------------------------
 
-The same cached, parallel map over units of <= --unit-rows trajectories as
-analyze_decoherence_rate.py (workflow.plan_units / map_cached): each unit is reduced to its count
+The same cached, parallel map over units of <= --unit-rows trajectories as analyze_rate.py
+(workflow.plan_units / map_cached): each unit is reduced to its count
 of trajectories past R* at every time, cached in <file>_partials/<version>/ (the version holds
 _VERSION and R*, so --epsil gets its own partials) and reused by every later run.  A shard still
 being written is read without a lock, never cached, and skipped with a warning if caught mid-append.
@@ -49,8 +49,8 @@ import functools
 import numpy as np
 
 from workflow import plan_units, map_cached, ncores_source, open_readonly   # cached map-reduce
-from analyze_decoherence_rate import (block_sem_from_means, k12_from_p2, line_fit, block_rate,
-                                      default_cache_dir, k12_panel, _band)
+from analyze_rate import (block_sem_from_means, k12_from_p2, line_fit, block_rate,
+                          default_cache_dir, k12_panel, _band)
 
 
 # Bump whenever the observable changes: every cached partial is then recomputed.
@@ -89,7 +89,7 @@ def compute(path, nblocks=None, fitmin=5.0, fitmax=15.0, beta_ovr=None, epsil_ov
         nbds = int(f.attrs['nbds'])
     if cfg.get('dynamics', 'mash') != 'bo':
         raise RuntimeError(f"{units[0].file} is a {cfg.get('dynamics', 'mash')!r} run, not dynamics='bo': "
-                           f"analyse MASH runs with analyze_decoherence_rate.py")
+                           f"analyse MASH runs with analyze_rate.py")
 
     kvec  = float(cfg['kvec']); epsil = float(cfg['epsil'])
     lbd   = float(cfg['lbd']);  delta = float(cfg['delta'])

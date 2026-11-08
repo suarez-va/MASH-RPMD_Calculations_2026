@@ -1,10 +1,9 @@
 """
-analyze_decoherence_rate.py -- analyze_p2.py with a DECOHERENCE CUT on the coherence factor: the
-quantum-jump-weighted population P_2(t), its time-dependent-weight correction M_2(t), the rate
-integrand K_12(t) with a BLOCK ANALYSIS of the rate, and the rate correction M_12(t), in one
-compiled, parallel, cached pass over the shards (or a data.hdf).  Output is a single 2x2 figure
-(analyze_decoherence_rate.png): top-left P_2, top-right M_2, bottom-left K_12 with its line fits,
-bottom-right M_12.  Everything is exactly analyze_p2.py's except Ct.
+analyze_rate.py -- the quantum-jump-weighted population P_2(t), its time-dependent-weight
+correction M_2(t), the rate integrand K_12(t) with a BLOCK ANALYSIS of the rate, and the rate
+correction M_12(t), in one compiled, parallel, cached pass over the shards (or a data.hdf).  Output
+is a single 2x2 figure (analyze_rate.png): top-left P_2, top-right M_2, bottom-left K_12 with its
+line fits, bottom-right M_12.  The observables are exactly those of MASH-RPMD_System-Bath/analyze_p2.py.
 
 --- the observables --------------------------------------------------------------------------------
 
@@ -13,15 +12,7 @@ bottom-right M_12.  Everything is exactly analyze_p2.py's except Ct.
  M_2(t)  =  P_2'(t) - P_2(t)
 
     P0 = 1 + K(0) sgn(Sz(0))    C0 = D(0) Sx(0)
-    Pt = 1 - K(t) sgn(Sz(t))    Ct = h(Rc - Rbar(t)) D(t) Sx(t)
-
-    Rc = sqrt(2/(lbd*kvec)) (ngap/beta - epsil/2)
-
-h is the Heaviside step (h(0) = 1/2) and Rbar the bead-average (centroid) nucR.  Rc is where
-kappa(R) = sqrt(lbd*kvec/2) R + epsil/2 reaches ngap/beta, i.e. where the adiabatic gap 2*kappa is
-2*ngap/beta: once a trajectory's centroid has crossed past Rc its coherence is taken to have
-decohered, and its Ct terms contribute 0.  ngap is --ngap (default 4); beta and epsil are the same
-values P2eq uses (the config's, or --beta / --epsil).  --ngap very large recovers analyze_p2.py.
+    Pt = 1 - K(t) sgn(Sz(t))    Ct = D(t) Sx(t)
 
 with t = 0 the first row of `time` (a prepared initial condition, not a sliding time origin) and
 <...> an average over trajectories.  The electronic-mixing functions are
@@ -29,8 +20,19 @@ with t = 0 the first row of `time` (a prepared initial condition, not a sliding 
     kappa(R) = sqrt(lbd*kvec/2)*R + epsil/2,   Delta = delta,   norm = sqrt(kappa^2 + Delta^2)
     K(R) = kappa/norm,    D(R) = Delta/norm
 
-(Delta is a constant in ET_with_bath.)  NOTE the relation to analyze_rate.py's a_b_functions, which
-returns a = -delta/norm and b = kappa/norm: K == b but D == -a.
+(Delta is a constant in ET_with_bath.)  NOTE the relation to the older MASH-RPMD_System-Bath
+analyze_pop.py / analyze_rate.py, whose a_b_functions return a = -delta/norm and b = kappa/norm:
+K == b but D == -a.  With no jumps (or --w0-only) and the full-sphere c0 = 2, P_2 is term for term
+their C_12(t),
+
+    P_2 = |Sz| P0 Pt - C0 Pt + P0 Ct - 3/2 C0 Ct,
+
+and K_12 below is analyze_k12.py's.  (Those scripts had no jump weights; analyze_pop.py also took
+a, b as bead averages rather than at the centroid -- the same for nbds = 1.)
+
+Decoherence is NOT imposed here: it enters through the quantum jumps of the dynamics (e.g.
+jump_gap with full_jump=False) and so through the weights W below.  The coherence terms Ct are kept
+for every trajectory at every time.
 
 The rate integrand and its correction:
 
@@ -99,9 +101,9 @@ reduced once, ever:
     is skipped with a warning.  Numbers that include in-progress shards are provisional;
   * a cached partial is reused only if the source file's size, mtime and committed rows, the row
     range and the version all match.  The version holds _VERSION, the potential parameters
-    (kvec, epsil, lbd, delta), Rc (so --ngap, --beta and --epsil each get their own partials) and
-    --w0-only.  --refresh recomputes everything, --no-cache neither
-    reads nor writes partials.  Bump _VERSION whenever an observable's definition changes.
+    (kvec, epsil, lbd, delta -- so --epsil gets its own partials), --w0-only and full_jump; --beta
+    only enters P2eq after the reduce and is not part of it.  --refresh recomputes everything,
+    --no-cache neither reads nor writes partials.  Bump _VERSION whenever an observable's definition changes.
 
 Run it as ONE multi-core job, not on a login node.  Without --ncores it uses the CPUs of the SLURM
 allocation it runs in ($SLURM_CPUS_PER_TASK, else the CPUs the job is confined to); outside SLURM, 1.
@@ -111,7 +113,7 @@ many workers.  All cores must be on ONE node.
     #SBATCH --nodes=1 --ntasks=1 --cpus-per-task=24
     #SBATCH --mem=24G
     #SBATCH --time=01:00:00                 # plus the account / env lines of config['slurm']
-    python ../../../../analyze_decoherence_rate.py --file shards --nblocks 100
+    python ../../../../analyze_rate.py --file shards --nblocks 100
 
 --- block analysis ---------------------------------------------------------------------------------
 
@@ -137,10 +139,10 @@ blocks.
 
 Usage (from a scan-point dir, e.g. Low-Friction/Epsilon-Scan/MASH-Classical/epsil_3.0,
 PYTHONPATH=<RP_MASH root>):
-    python ../../../../analyze_decoherence_rate.py                # shards/ if present, else data.hdf
-    python ../../../../analyze_decoherence_rate.py --file shards --ncores 16 --ngap 4
-    python ../../../../analyze_decoherence_rate.py --ngap 2 --out decoh_ngap2.png
-    python ../../../../analyze_decoherence_rate.py --refresh      # after changing an observable
+    python ../../../../analyze_rate.py                # shards/ if present, else data.hdf
+    python ../../../../analyze_rate.py --file shards --ncores 16 --nblocks 100 --fitmin 5 --fitmax 15
+    python ../../../../analyze_rate.py --w0-only --out analyze_rate_nojump.png
+    python ../../../../analyze_rate.py --refresh      # after changing an observable
 """
 
 import os
@@ -157,7 +159,7 @@ from workflow import plan_units, map_cached, ncores_source, open_readonly   # ca
 
 
 # Bump whenever the observables or their weights change: every cached partial is then recomputed.
-_VERSION = 'dr_v1'
+_VERSION = 'rate_v1'
 
 _TERMS = ('+P0 W_PP Pt', '-C0 W_CP Pt', '+P0 W_PC Ct', '-C0 W_CC Ct')
 
@@ -197,16 +199,14 @@ def _accumulate(R, Sz, Sx, tab, cnt, time, prm, full):
 
     in the operation order of workflow.consolidate._full_jump_recursion. A no-jump run comes in
     with a synthetic row 0 and cnt = 1, --w0-only with the real table and cnt = 1: either way m
-    stays 0. prm = (kvec, epsil, lbd, delta, Rc); Ct carries h(Rc - Rbar), h(0) = 1/2. Returns
-    tot (8, T) -- the four terms of P_2 (constant weights), then of P_2' (time-dependent weights),
-    in _TERMS order, each with its 1/4 -- past (T,), the number of trajectories with Rbar > Rc at
-    each time, the number of jumps, and whether every Sz(0) is <= 0 / >= 0.
+    stays 0. prm = (kvec, epsil, lbd, delta). Returns tot (8, T) -- the four terms of P_2 (constant
+    weights), then of P_2' (time-dependent weights), in _TERMS order, each with its 1/4 -- the
+    number of jumps, and whether every Sz(0) is <= 0 / >= 0.
     """
     n, T, nb = Sz.shape
-    kvec = prm[0]; epsil = prm[1]; lbd = prm[2]; delta = prm[3]; Rc = prm[4]
+    kvec = prm[0]; epsil = prm[1]; lbd = prm[2]; delta = prm[3]
     slope = np.sqrt(lbd * kvec / 2.0)
     tot = np.zeros((8, T))
-    past = np.zeros(T)
     n_jumps = 0
     le0 = True
     ge0 = True
@@ -232,10 +232,7 @@ def _accumulate(R, Sz, Sx, tab, cnt, time, prm, full):
                 le0 = le0 and sz <= 0.0
                 ge0 = ge0 and sz >= 0.0
             Pt = 1.0 - K * sg
-            hR = 1.0 if rb < Rc else (0.5 if rb == Rc else 0.0)   # h(Rc - Rbar): decoherence cut
-            if rb > Rc:
-                past[t] += 1.0
-            Ct = hR * D * sx
+            Ct = D * sx
 
             while m + 1 < c and tab[k, m + 1, 0] <= time[t]:
                 m += 1
@@ -261,7 +258,7 @@ def _accumulate(R, Sz, Sx, tab, cnt, time, prm, full):
             tot[5, t] -= 0.25 * C0 * Wt_CP * Pt
             tot[6, t] += 0.25 * P0 * Wt_PC * Ct
             tot[7, t] -= 0.25 * C0 * Wt_CC * Ct
-    return tot, past, n_jumps, le0, ge0
+    return tot, n_jumps, le0, ge0
 
 
 def _unit_partial(path, lo, hi, jumps, w0_only, time, prm, full=True):
@@ -293,8 +290,8 @@ def _unit_partial(path, lo, hi, jumps, w0_only, time, prm, full=True):
         raise ValueError(f'{path}: /weights has NaN in S^(m-1)(t_m) / W^(m-1)(t_m) of a jump row. '
                          f'This full_jump=False run was made before RP_MASH wrote its time-dependent '
                          f'weights; re-run it (or pass --w0-only).')
-    tot, past, n_jumps, le0, ge0 = _accumulate(R, Sz, Sx, tab, cnt, time, prm, full)
-    return dict(n=np.int64(hi - lo), tot=tot, past=past, n_jumps=np.int64(n_jumps),
+    tot, n_jumps, le0, ge0 = _accumulate(R, Sz, Sx, tab, cnt, time, prm, full)
+    return dict(n=np.int64(hi - lo), tot=tot, n_jumps=np.int64(n_jumps),
                 sz0_le0=np.bool_(le0), sz0_ge0=np.bool_(ge0))
 
 
@@ -369,7 +366,7 @@ def block_rate(time, blk_P2, P2eq, fitmin, fitmax):
 
 def compute(path, nblocks=None, fitmin=5.0, fitmax=15.0, beta_ovr=None, epsil_ovr=None,
             slab=None, w0_only=False, c0=None, ncores=None, unit_rows=1000,
-            cache=True, refresh=False, cache_dir=None, ngap=4.0):
+            cache=True, refresh=False, cache_dir=None):
     """
     REDUCE step. `path` (a shard directory or a data.hdf) is split into units of at most unit_rows
     rows of one file (workflow.plan_units); every unit is reduced to its partial sums by
@@ -395,9 +392,7 @@ def compute(path, nblocks=None, fitmin=5.0, fitmax=15.0, beta_ovr=None, epsil_ov
     beta  = float(cfg['beta'])
     if beta_ovr  is not None: beta  = float(beta_ovr)
     if epsil_ovr is not None: epsil = float(epsil_ovr)
-    # decoherence cut: kappa(Rc) = ngap/beta, with the same beta / epsil as P2eq
-    Rc = float(np.sqrt(2.0 / (lbd * kvec)) * (float(ngap) / beta - epsil / 2.0))
-    prm = np.array([kvec, epsil, lbd, delta, Rc], dtype=np.float64)
+    prm = np.array([kvec, epsil, lbd, delta], dtype=np.float64)
 
     # parallel setup, reported so a silent fall-back to one core cannot go unnoticed
     if ncores is None:
@@ -409,16 +404,16 @@ def compute(path, nblocks=None, fitmin=5.0, fitmax=15.0, beta_ovr=None, epsil_ov
     fn = functools.partial(_unit_partial, jumps=jumps, w0_only=w0_only, time=time, prm=prm,
                            full=full)
     parts, st = map_cached(fn, units, cache_dir, version, ncores=ncores, refresh=refresh,
-                           use_cache=cache, tag='[dr]')
+                           use_cache=cache, tag='[rate]')
     n_inprog = sum(not u.complete for u in units)
-    print(f'[dr] {len(units)} unit(s) of <= {unit_rows} trajectories: {st["cached"]} from cache, '
+    print(f'[rate] {len(units)} unit(s) of <= {unit_rows} trajectories: {st["cached"]} from cache, '
           f'{st["computed"] + st["in_progress"]} computed on {ncores} worker(s) ({why})'
           + (f'; {n_inprog} unit(s) in shards still being written (never cached)' if n_inprog else '')
           + ('' if cache else '; cache off'), flush=True)
     for note in st['notes']:
-        print(f'[dr] WARNING: {note}', flush=True)
+        print(f'[rate] WARNING: {note}', flush=True)
     if ncores == 1 and why == 'not inside a SLURM job' and st['computed'] + st['in_progress'] > 1:
-        print('[dr] NOTE: computed on ONE core. Pass --ncores N to use N cores.', flush=True)
+        print('[rate] NOTE: computed on ONE core. Pass --ncores N to use N cores.', flush=True)
 
     used = [p for p in parts if p is not None]
     n_units = len(used)
@@ -430,9 +425,8 @@ def compute(path, nblocks=None, fitmin=5.0, fitmax=15.0, beta_ovr=None, epsil_ov
     # blocks: nblocks contiguous groups of whole units, block mean = block sum / block count
     nb = n_units if nblocks is None else max(1, min(int(nblocks), n_units))
     if nblocks is not None and int(nblocks) > n_units:
-        print(f'[dr] NOTE: only {n_units} units, so {nb} blocks instead of {nblocks}', flush=True)
+        print(f'[rate] NOTE: only {n_units} units, so {nb} blocks instead of {nblocks}', flush=True)
     tot = np.zeros((8, T))
-    past = np.zeros(T)
     blk = np.zeros((nb, 8, T))
     block_sizes = np.zeros(nb)
     n_jumps = 0
@@ -441,7 +435,6 @@ def compute(path, nblocks=None, fitmin=5.0, fitmax=15.0, beta_ovr=None, epsil_ov
         for i in grp:
             p = used[i]
             tot += p['tot']
-            past += p['past']
             blk[b] += p['tot']
             block_sizes[b] += int(p['n'])
             n_jumps += int(p['n_jumps'])
@@ -487,7 +480,7 @@ def compute(path, nblocks=None, fitmin=5.0, fitmax=15.0, beta_ovr=None, epsil_ov
                 P2eq=P2eq, beta=beta, n_traj=n_traj, nbds=nbds, nblocks=nb,
                 n_files=len({u.file for u in units}), n_units=n_units, cache_stats=st,
                 n_jumps=n_jumps, jumps=jumps, c0=c0, full_jump=full, Tjump=cfg.get('Tjump'),
-                jump_label=jump_label(cfg), ngap=float(ngap), Rc=Rc, frac_past=past / n_traj,
+                jump_label=jump_label(cfg),
                 fitmin=fitmin, fitmax=fitmax, w0_only=w0_only,
                 params=dict(kvec=kvec, epsil=epsil, lbd=lbd, delta=delta))
 
@@ -603,7 +596,7 @@ def _plot(out, r, tmax=None):
 
     p = r['params']
     fig.suptitle(f"n_traj={r['n_traj']}, nbds={r['nbds']}, nblocks={r['nblocks']}, "
-                 f"{r['jump_label']}   ngap={r['ngap']:g}, Rc={r['Rc']:.4g}\n"
+                 f"{r['jump_label']}\n"
                  f"P2eq={r['P2eq']:.6f} (beta={r['beta']:g}, epsil={p['epsil']:g})   "
                  f"fit window [{fmin:g}, {fmax:g}]"
                  + ("   [W^(0) ONLY -- no-jump baseline]" if r['w0_only'] else ""), fontsize=11)
@@ -614,9 +607,8 @@ def _plot(out, r, tmax=None):
 
 def _main():
     ap = argparse.ArgumentParser(
-        description='analyze_p2 with the decoherence cut Ct = h(Rc - Rbar) D Sx: jump-weighted '
-                    'P2(t), M2(t), K12(t) with a block analysis of the rate, and M12(t), from '
-                    'RP-MASH shards or a data.hdf.')
+        description='Jump-weighted P2(t), M2(t), K12(t) with a block analysis of the rate, and '
+                    'M12(t), from RP-MASH shards or a data.hdf.')
     ap.add_argument('--file',    default=None,
                     help='a shard directory or a data.hdf (default: shards/ if it exists, else data.hdf)')
     ap.add_argument('--nblocks', type=int, default=100, help='trajectory blocks (default 100)')
@@ -625,8 +617,6 @@ def _main():
     ap.add_argument('--tmax',    type=float, default=None, help='truncate the PLOT to t <= tmax')
     ap.add_argument('--beta',    type=float, default=None, help='override full inverse temperature')
     ap.add_argument('--epsil',   type=float, default=None, help='override driving force epsil')
-    ap.add_argument('--ngap',    type=float, default=4.0,
-                    help='decoherence cut: Rc = sqrt(2/(lbd*kvec)) (ngap/beta - epsil/2) (default 4)')
     ap.add_argument('--w0-only', action='store_true',
                     help='ignore the jumps: W^(m) -> W^(0), W^(m)(t) -> W^(0)(t) (no-jump baseline)')
     ap.add_argument('--c0',      type=float, default=None,
@@ -645,7 +635,7 @@ def _main():
     ap.add_argument('--ncores',  type=int, default=None,
                     help='worker processes computing units in parallel (default: the CPUs of the '
                          'SLURM allocation, else 1)')
-    ap.add_argument('--out',     default='analyze_decoherence_rate.png', help='output png')
+    ap.add_argument('--out',     default='analyze_rate.png', help='output png')
     a = ap.parse_args()
     path = a.file or ('shards' if os.path.isdir('shards') else 'data.hdf')
 
@@ -653,43 +643,41 @@ def _main():
         r = compute(path, nblocks=a.nblocks, fitmin=a.fitmin, fitmax=a.fitmax,
                     beta_ovr=a.beta, epsil_ovr=a.epsil, w0_only=a.w0_only, c0=a.c0,
                     ncores=a.ncores, unit_rows=a.unit_rows, cache=not a.no_cache,
-                    refresh=a.refresh, cache_dir=a.cache_dir, ngap=a.ngap)
+                    refresh=a.refresh, cache_dir=a.cache_dir)
     except RuntimeError as e:
-        raise SystemExit(f'[dr] {e}')
+        raise SystemExit(f'[rate] {e}')
     _plot(a.out, r, tmax=a.tmax)
 
     p = r['params']
-    print(f"[dr] {path}: n_traj={r['n_traj']} from {r['n_files']} file(s) / {r['n_units']} unit(s), "
+    print(f"[rate] {path}: n_traj={r['n_traj']} from {r['n_files']} file(s) / {r['n_units']} unit(s), "
           f"nbds={r['nbds']}, nblocks={r['nblocks']}" + ("  [W^(0) ONLY]" if r['w0_only'] else ""))
     if r['jumps']:
-        print(f"[dr] {r['jump_label']} full_jump={r['full_jump']}  total jumps across all trajectories: "
+        print(f"[rate] {r['jump_label']} full_jump={r['full_jump']}  total jumps across all trajectories: "
               f"{r['n_jumps']} ({r['n_jumps'] / r['n_traj']:.3f} per trajectory)")
     else:
-        print(f"[dr] no /weights table (old run, {r['jump_label']}): Tjump -> infinity, "
+        print(f"[rate] no /weights table (old run, {r['jump_label']}): Tjump -> infinity, "
               f"W^(0) only, c0={r['c0']:g}" + (' (from --c0)' if a.c0 is not None else
                                                 ' (inferred from Sz(0))'))
-    print(f"[dr] params: kvec={p['kvec']} epsil={p['epsil']} lbd={p['lbd']} delta={p['delta']:.6e} (log10 {np.log10(p['delta']):.4g})")
-    print(f"[dr] beta={r['beta']:g}  P2eq={r['P2eq']:.6f}")
-    print(f"[dr] decoherence cut: ngap={r['ngap']:g}  Rc={r['Rc']:.6g}   fraction of trajectories "
-          f"with Rbar > Rc (Ct cut off): t=0 {r['frac_past'][0]:.4f}, t=T {r['frac_past'][-1]:.4f}")
-    print(f"[dr] P2(0)={r['P2'][0]:.6e} +/- {r['P2_SE'][0]:.3e}   "
+    print(f"[rate] params: kvec={p['kvec']} epsil={p['epsil']} lbd={p['lbd']} delta={p['delta']:.6e} (log10 {np.log10(p['delta']):.4g})")
+    print(f"[rate] beta={r['beta']:g}  P2eq={r['P2eq']:.6f}")
+    print(f"[rate] P2(0)={r['P2'][0]:.6e} +/- {r['P2_SE'][0]:.3e}   "
           f"P2 range [{r['P2'].min():.6e}, {r['P2'].max():.6e}]")
-    print(f"[dr] M2(0)={r['M2'][0]:.3e} (0 up to rounding)   "
+    print(f"[rate] M2(0)={r['M2'][0]:.3e} (0 up to rounding)   "
           f"M2 range [{r['M2'].min():.6e}, {r['M2'].max():.6e}]")
-    print(f"[dr] P2 term means at t=0: " + ', '.join(f'{v:.4e}' for v in r['terms'][:, 0]))
-    print(f"[dr] FULL fit of K12 over t=[{r['fitmin']:g},{r['fitmax']:g}] "
+    print(f"[rate] P2 term means at t=0: " + ', '.join(f'{v:.4e}' for v in r['terms'][:, 0]))
+    print(f"[rate] FULL fit of K12 over t=[{r['fitmin']:g},{r['fitmax']:g}] "
           f"({r['n_full']} pts):  m={r['m_full']:.6g}  b={r['b_full']:.6g}  r={r['r_full']:.6f}")
-    print(f"[dr] BLOCK analysis ({r['slopes'].size} usable blocks):  "
+    print(f"[rate] BLOCK analysis ({r['slopes'].size} usable blocks):  "
           f"m = {r['m_bar']:.6g} +/- {r['sigma_m']:.6g}")
-    print(f"[dr] M12(T)={r['M12'][-1]:.6e} +/- {r['M12_SE'][-1]:.3e}")
+    print(f"[rate] M12(T)={r['M12'][-1]:.6e} +/- {r['M12_SE'][-1]:.3e}")
     if r['n_nonphys']:
-        print(f"[dr] WARNING: {r['n_nonphys']} of {r['nblocks']} blocks have u = 1 - P2/P2eq <= 0 "
+        print(f"[rate] WARNING: {r['n_nonphys']} of {r['nblocks']} blocks have u = 1 - P2/P2eq <= 0 "
               f"inside the fit window; K12 crosses the log singularity there, so those block slopes "
               f"are unphysical and distort the mean. Use fewer, larger blocks (--nblocks).")
     if r['n_skipped']:
-        print(f"[dr] WARNING: {r['n_skipped']} block(s) had <2 finite points in the window "
+        print(f"[rate] WARNING: {r['n_skipped']} block(s) had <2 finite points in the window "
               f"and were skipped.")
-    print(f"[dr] wrote {a.out}")
+    print(f"[rate] wrote {a.out}")
 
 
 if __name__ == '__main__':

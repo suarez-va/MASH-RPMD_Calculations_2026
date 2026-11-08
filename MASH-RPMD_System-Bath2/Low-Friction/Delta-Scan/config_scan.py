@@ -29,6 +29,9 @@ def _inherit(relpath):
 CONFIG = _inherit('../config_friction.py')
 
 CONFIG.update({
+    'n_traj'    : 1000000,      # number of independent trajectories to run
+    'shard_size': 100,        # trajectories per shards/shard_<s>.hdf (None -> one dir per trajectory)
+
     'log10_delta_scan' : [-1.1, -1.0, -0.9, -0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
     'full_jump'  : False,               # hemisphere jumps: resample within the current adiabat
     'jump_index' : [],                  # k -> jump at t = k*delt of production; [] = no jumps

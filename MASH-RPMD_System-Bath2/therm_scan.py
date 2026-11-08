@@ -20,7 +20,7 @@ workflow.shards sees scan_points() and stores point <name> of trajectory idx as 
 shard's config_json.  So <run_dir>/epsil_3.0/shards/ is an ordinary shard directory, and the
 analysis runs inside it unchanged:
 
-    cd epsil_3.0 && python ../../../../analyze_decoherence_rate.py --file shards --ncores 20
+    cd epsil_3.0 && python ../../../../analyze_rate.py --file shards --ncores 20
     cd delta_1e-1.10 && python ../../../../analyze_bo_rate.py --file shards --ncores 20   # a BO run
 
 --- the scan --------------------------------------------------------------------------------------
