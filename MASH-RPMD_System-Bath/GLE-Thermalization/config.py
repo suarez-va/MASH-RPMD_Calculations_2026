@@ -1,62 +1,63 @@
 """
-config.py -- the GLE thermalization test: many independent BO-RPMD trajectories in the donor well,
-thermostatted by the generalized Langevin equation, to check that the GLE samples the right
-equilibrium distribution and dynamics (analyze_gle.py).
-
-Inherits ../config_base.py (orchestration, slurm, mass, beta, kvec, lbd, bath).  With epsil = -100
-the donor diabat V0 lies 100 below V1, so the lower adiabat IS V0 -- a harmonic well centred at
-R0 = -sqrt(lbd/(2 kvec)) with omega = sqrt(kvec/m) -- and the crossing R* = -epsil/sqrt(2 lbd kvec)
-is far out of reach.  Every analytic reference in analyze_gle.py then holds exactly.
-
-    python -m workflow.runner --config config.py                    # local
-    python -m workflow.slurm  --config config.py && sbatch submit_grid.sh
+    python -m workflow.runner --config config.py                             # Local
+    python -m workflow.slurm  --config config.py && sbatch submit_grid.sh    # HPC
 """
 
-import os
-import copy
-import importlib.util
-
-
-def _inherit(relpath):
-    """Load the parent config's CONFIG from a path relative to THIS file."""
-    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), relpath)
-    name = '_cfg_' + os.path.splitext(os.path.basename(p))[0]
-    spec = importlib.util.spec_from_file_location(name, p)
-    mod  = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return copy.deepcopy(mod.CONFIG)
-
-
-CONFIG = _inherit('../config_base.py')
-
-CONFIG.update({
-    # ------------------------------------------------------------------ orchestration
-    'n_traj'      : 1000,           # number of independent trajectories to run
-    'shard_size'  : 10,             # trajectories per shards/shard_<s>.hdf
-    'ncores'      : 5,           # local cores for `python -m workflow.runner`
+CONFIG = {
+    # ----------------------------------------------------------------- orchestration (workflow)
+    'n_traj'      : 10000,                      # number of independent trajectories to run
+    'base_seed'   : None,                       # int -> reproducible; None -> fresh OS entropy each trajectory
+    'ncores'      : 10,                         # local cores for `python -m workflow.runner`
+    'shard_size'  : 10,                         # trajectories per shards/shard_<s>.hdf (None -> one dir per trajectory)
+    'shard_dir'   : 'shards',
     'system_file' : 'gle_run.py',
     'grid_dir'    : 'traj_grid',
 
+    'slurm': {
+        'max_tasks'     : 100,
+        'job_name'      : 'GLE-RPMD',
+        'time'          : '09:00:00',
+        'cpus_per_task' : 10,
+        'max_concurrent': None,
+        'partition'     : None,
+        'account'       : 'gts-jkretchmer3-chemx',
+        'mem_per_cpu'   : '8GB', 
+        'python'        : 'python',
+        'extra_directives': [],
+        'extra_commands': [
+            'eval "$(/storage/home/hcoda1/8/vsuarez6/r-jkretchmer3-0/MiniConda/bin/conda shell.bash hook)"',
+            'conda activate map-rpmd'],
+    },
+
     # ------------------------------------------------------------------ dynamics
-    'dynamics'    : 'bo',            # Born-Oppenheimer on the lower adiabat (RP_MASH bo_rpmd)
-    'jump_index'  : [],              # no spin, so no quantum jumps
-    'jump_gap'    : None,
-    'full_jump'   : True,            # unused by BO
+    'dynamics'          : 'bo',                  # Born-Oppenheimer on the lower adiabat
+    'nbds'              : 12,                    # number of ring-polymer beads
+    'jump_index'        : [],                    # unused by BO
+    'jump_gap'          : None,                  # unused by BO
+    'full_jump'         : False,                 # unused by BO
 
-    # ------------------------------------------------------------------ model (donor well only)
-    'epsil'       : -100.0,          # driving force: the lower adiabat is the donor parabola
-    'log10_delta' : -7.0,            # delta = 10**(-7) ~ 0
+    # ----------------------------------------------------------------- Marcus ET model
+    'nnuc'              : 1,
+    'nstates'           : 2,
+    'mass'              : [1.0],                 # mass
+    'beta'              : 1.0,                   # inverse temperature
+    #'kvec'              : 2.0,                   # marcus parabola curvature
+    #'kvec'              : 2.0,                   # marcus parabola curvature
+    'kvec'              : 4.0,                   # marcus parabola curvature
+    'lbd'               : 12.0,                  # reorganization energy
+    'epsil'             : -100.0,                # driving force
+    'log10_delta'       : -7.0,                  # diabatic coupling strength
+    'bath'              : [0, 1.0, 2.0, 2.0],    # [N_bath, mass, gamma, w_b]; N_bath=0 -> no explicit bath
 
-    # ------------------------------------------------------------------ ring polymer
-    'nbds' : 6,
-
-    # ------------------------------------------------------------------ integrator
-    'delt'       : 0.001,
-    'total_time' : 30.0,             # a.u.; Nsteps = total_time / delt
-    'Nprint'     : 25,               # output every Nprint steps (ACF time resolution = Nprint*delt)
-
-    # ------------------------------------------------------------------ thermostat
-    'langevin'        : 'generalized',
-    #'langevin_params' : {'gamma': 64.0, 'Tmem': 25.0, 'Tfluc': 30.0},
-    'langevin_params' : {'gamma': 2.0, 'Tmem': 15.0, 'Tfluc': 30.0},
-})
+    # ------------------------------------------------------------------ thermostat + integrator
+    #'delt'              : 5e-4,
+    #'delt'              : 5e-4,
+    'delt'              : 2e-4,
+    'intype'            : 'spin_magnus_adaptive',
+    'langevin'          : 'generalized',
+    #'langevin_params'   : {'gamma': 2.0, 'Tmem': 15.0, 'Tfluc': 35.0},
+    #'langevin_params'   : {'gamma': 64.0, 'Tmem': 15.0, 'Tfluc': 35.0},
+    'langevin_params'   : {'gamma': 4.0, 'Tmem': 15.0, 'Tfluc': 35.0},
+    'total_time'        : 35.0,
+    'Nprint'            : 50,  
+}
